@@ -103,6 +103,26 @@ class TcpServerTest {
         assertThat(cancel(clientId, Nonce.random())).isEqualTo(CancelResponse.notRegistered());
     }
 
+    @Test
+    void malformedFrameClosesOnlyThatConnectionAndServerKeepsRunning() throws IOException {
+        ByteBuffer badFrame = ByteBuffer.allocate(5)
+                .put((byte) 0x7F) // unknown MessageType code
+                .putInt(0)
+                .flip();
+
+        try (SocketChannel channel = SocketChannel.open(new InetSocketAddress("localhost", properties.tcpPort()))) {
+            channel.write(badFrame);
+
+            ByteBuffer readBuffer = ByteBuffer.allocate(64);
+            int bytesRead = channel.read(readBuffer);
+            assertThat(bytesRead).isEqualTo(-1); // Server closed the connection rather than hanging or crashing.
+        }
+
+        // The reactor thread must still be alive and serving other connections.
+        ClientId clientId = ClientId.parse("666666666666");
+        assertThat(register(clientId).status()).isEqualTo(StatusCode.SUCCESS);
+    }
+
     private RegisterResponse register(ClientId clientId) throws IOException {
         RegisterResponse challengeResponse = (RegisterResponse) send(RegisterRequest.initial(clientId, TraceContext.newTrace()));
         var signature = Ed25519.sign(signingKey, challengeResponse.nonce());

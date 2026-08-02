@@ -122,6 +122,14 @@ public class TcpServer implements SmartLifecycle {
                 } catch (IOException e) {
                     log.debug("Connection error, closing", e);
                     closeConnection(key);
+                } catch (RuntimeException e) {
+                    // FrameDecoder/MessageCodec reject malformed input (unknown MessageType,
+                    // an out-of-range or negative payload length, a payload that's the wrong
+                    // shape for its declared type) by throwing unchecked exceptions - isolate
+                    // that to this one connection rather than letting it kill the whole
+                    // single-threaded reactor (ADR-0001) and take every other Client down with it.
+                    log.warn("Malformed frame or protocol error, closing connection", e);
+                    closeConnection(key);
                 }
             }
         }
