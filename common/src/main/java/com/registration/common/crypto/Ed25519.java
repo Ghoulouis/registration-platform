@@ -1,7 +1,5 @@
 package com.registration.common.crypto;
 
-import com.registration.common.protocol.Challenge;
-import com.registration.common.protocol.ChallengeResponse;
 import com.registration.common.protocol.Nonce;
 import com.registration.common.protocol.NonceSignature;
 
@@ -16,7 +14,7 @@ import java.security.spec.X509EncodedKeySpec;
 import java.util.Base64;
 
 /**
- * Signs and verifies a {@link Challenge} with the Shared Signing Key (ADR-0009). The
+ * Signs and verifies a {@link Nonce} with the Shared Signing Key (ADR-0009, ADR-0011). The
  * private key never needs the Server to hold it and vice versa for the public key —
  * that asymmetry is the whole point of choosing Ed25519 over an HMAC shared secret.
  */
@@ -62,28 +60,6 @@ public final class Ed25519 {
             return keyFactory.generatePublic(new X509EncodedKeySpec(encoded));
         } catch (GeneralSecurityException e) {
             throw new IllegalStateException("Failed to parse Ed25519 public key", e);
-        }
-    }
-
-    public static ChallengeResponse sign(PrivateKey privateKey, Challenge challenge) {
-        try {
-            Signature signature = Signature.getInstance(ALGORITHM);
-            signature.initSign(privateKey);
-            signature.update(challenge.value());
-            return ChallengeResponse.of(signature.sign());
-        } catch (GeneralSecurityException e) {
-            throw new IllegalStateException("Failed to sign Challenge", e);
-        }
-    }
-
-    public static boolean verify(PublicKey publicKey, Challenge challenge, ChallengeResponse response) {
-        try {
-            Signature verifier = Signature.getInstance(ALGORITHM);
-            verifier.initVerify(publicKey);
-            verifier.update(challenge.value());
-            return verifier.verify(response.value());
-        } catch (GeneralSecurityException e) {
-            return false;
         }
     }
 

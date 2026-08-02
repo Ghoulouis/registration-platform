@@ -3,8 +3,6 @@ package com.registration.server.domain;
 import com.registration.common.crypto.Ed25519;
 import com.registration.common.protocol.CancelRequest;
 import com.registration.common.protocol.CancelResponse;
-import com.registration.common.protocol.Challenge;
-import com.registration.common.protocol.ChallengeResponse;
 import com.registration.common.protocol.ClientId;
 import com.registration.common.protocol.Nonce;
 import com.registration.common.protocol.NonceSignature;
@@ -13,8 +11,8 @@ import com.registration.common.protocol.RegisterResponse;
 import com.registration.common.protocol.RenewRequest;
 import com.registration.common.protocol.RenewResponse;
 import com.registration.common.protocol.StatusCode;
+import com.registration.common.protocol.TraceContext;
 import com.registration.server.config.RegistrationProperties;
-import com.registration.server.store.InMemoryChallengeStore;
 import com.registration.server.store.InMemoryRegistrationStore;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -38,7 +36,7 @@ class RegistrationServiceTest {
     void setUp() {
         RegistrationProperties properties =
                 new RegistrationProperties(0, VALIDITY_PERIOD_SECONDS, 1000, 30, PUBLIC_KEY_B64);
-        service = new RegistrationService(new InMemoryRegistrationStore(), new InMemoryChallengeStore(), properties);
+        service = new RegistrationService(new InMemoryRegistrationStore(), properties);
         signingKey = Ed25519.parsePrivateKey(PRIVATE_SEED_B64);
     }
 
@@ -57,32 +55,32 @@ class RegistrationServiceTest {
     void initialRegisterRequestReturnsAChallenge() {
         ClientId clientId = ClientId.parse("123456789012");
 
-        RegisterResponse response = (RegisterResponse) service.handle(RegisterRequest.initial(clientId));
+        RegisterResponse response = (RegisterResponse) service.handle(RegisterRequest.initial(clientId, TraceContext.newTrace()));
 
         assertThat(response.status()).isEqualTo(StatusCode.CHALLENGE);
-        assertThat(response.challenge()).isNotNull();
+        assertThat(response.nonce()).isNotNull();
     }
 
     @Test
     void wrongSignatureIsRejected() {
         ClientId clientId = ClientId.parse("123456789012");
-        service.handle(RegisterRequest.initial(clientId));
-        ChallengeResponse bogus = ChallengeResponse.of(new byte[ChallengeResponse.LENGTH]);
+        service.handle(RegisterRequest.initial(clientId, TraceContext.newTrace()));
+        NonceSignature bogus = NonceSignature.of(new byte[NonceSignature.LENGTH]);
 
-        assertThat(service.handle(RegisterRequest.withChallengeResponse(clientId, bogus)))
+        assertThat(service.handle(RegisterRequest.withNonceSignature(clientId, TraceContext.newTrace(), bogus)))
                 .isEqualTo(RegisterResponse.challengeRejected());
     }
 
     @Test
-    void challengeCannotBeReusedAfterAFailedAttempt() {
+    void pendingNonceCannotBeReusedAfterAFailedAttempt() {
         ClientId clientId = ClientId.parse("123456789012");
-        RegisterResponse challengeResponse = (RegisterResponse) service.handle(RegisterRequest.initial(clientId));
-        Challenge challenge = challengeResponse.challenge();
-        ChallengeResponse bogus = ChallengeResponse.of(new byte[ChallengeResponse.LENGTH]);
-        service.handle(RegisterRequest.withChallengeResponse(clientId, bogus)); // burns the Challenge
+        RegisterResponse challengeResponse = (RegisterResponse) service.handle(RegisterRequest.initial(clientId, TraceContext.newTrace()));
+        Nonce pendingNonce = challengeResponse.nonce();
+        NonceSignature bogus = NonceSignature.of(new byte[NonceSignature.LENGTH]);
+        service.handle(RegisterRequest.withNonceSignature(clientId, TraceContext.newTrace(), bogus)); // wrong signature burns the pending Nonce (ADR-0009)
 
-        ChallengeResponse validSignature = Ed25519.sign(signingKey, challenge);
-        assertThat(service.handle(RegisterRequest.withChallengeResponse(clientId, validSignature)))
+        NonceSignature validSignature = Ed25519.sign(signingKey, pendingNonce);
+        assertThat(service.handle(RegisterRequest.withNonceSignature(clientId, TraceContext.newTrace(), validSignature)))
                 .isEqualTo(RegisterResponse.challengeRejected());
     }
 
@@ -91,7 +89,7 @@ class RegistrationServiceTest {
         ClientId clientId = ClientId.parse("123456789012");
         RegisterResponse first = register(clientId);
 
-        RegisterResponse second = (RegisterResponse) service.handle(RegisterRequest.initial(clientId));
+        RegisterResponse second = (RegisterResponse) service.handle(RegisterRequest.initial(clientId, TraceContext.newTrace()));
 
         assertThat(second.status()).isEqualTo(StatusCode.ALREADY_REGISTERED);
         assertThat(second.nonce()).isEqualTo(first.nonce());
@@ -183,18 +181,18 @@ class RegistrationServiceTest {
     }
 
     private RegisterResponse register(ClientId clientId) {
-        RegisterResponse challengeResponse = (RegisterResponse) service.handle(RegisterRequest.initial(clientId));
-        ChallengeResponse signature = Ed25519.sign(signingKey, challengeResponse.challenge());
-        return (RegisterResponse) service.handle(RegisterRequest.withChallengeResponse(clientId, signature));
+        RegisterResponse challengeResponse = (RegisterResponse) service.handle(RegisterRequest.initial(clientId, TraceContext.newTrace()));
+        NonceSignature signature = Ed25519.sign(signingKey, challengeResponse.nonce());
+        return (RegisterResponse) service.handle(RegisterRequest.withNonceSignature(clientId, TraceContext.newTrace(), signature));
     }
 
     private RenewResponse renew(ClientId clientId, Nonce nonceToSign) {
         NonceSignature signature = Ed25519.sign(signingKey, nonceToSign);
-        return (RenewResponse) service.handle(new RenewRequest(clientId, signature));
+        return (RenewResponse) service.handle(new RenewRequest(clientId, TraceContext.newTrace(), signature));
     }
 
     private CancelResponse cancel(ClientId clientId, Nonce nonceToSign) {
         NonceSignature signature = Ed25519.sign(signingKey, nonceToSign);
-        return (CancelResponse) service.handle(new CancelRequest(clientId, signature));
+        return (CancelResponse) service.handle(new CancelRequest(clientId, TraceContext.newTrace(), signature));
     }
 }

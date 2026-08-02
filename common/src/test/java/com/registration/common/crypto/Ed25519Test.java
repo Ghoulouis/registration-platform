@@ -1,7 +1,7 @@
 package com.registration.common.crypto;
 
-import com.registration.common.protocol.Challenge;
-import com.registration.common.protocol.ChallengeResponse;
+import com.registration.common.protocol.Nonce;
+import com.registration.common.protocol.NonceSignature;
 import org.junit.jupiter.api.Test;
 
 import java.security.PrivateKey;
@@ -20,19 +20,19 @@ class Ed25519Test {
     void verifiesASignatureProducedByTheMatchingPrivateKey() {
         PrivateKey privateKey = Ed25519.parsePrivateKey(PRIVATE_SEED_B64);
         PublicKey publicKey = Ed25519.parsePublicKey(PUBLIC_KEY_B64);
-        Challenge challenge = Challenge.random();
+        Nonce nonce = Nonce.random();
 
-        ChallengeResponse response = Ed25519.sign(privateKey, challenge);
+        NonceSignature signature = Ed25519.sign(privateKey, nonce);
 
-        assertTrue(Ed25519.verify(publicKey, challenge, response));
+        assertTrue(Ed25519.verify(publicKey, nonce, signature));
     }
 
     @Test
-    void rejectsASignatureOverADifferentChallenge() {
+    void rejectsASignatureOverADifferentNonce() {
         PrivateKey privateKey = Ed25519.parsePrivateKey(PRIVATE_SEED_B64);
         PublicKey publicKey = Ed25519.parsePublicKey(PUBLIC_KEY_B64);
-        ChallengeResponse response = Ed25519.sign(privateKey, Challenge.random());
+        NonceSignature signature = Ed25519.sign(privateKey, Nonce.random());
 
-        assertFalse(Ed25519.verify(publicKey, Challenge.random(), response));
+        assertFalse(Ed25519.verify(publicKey, Nonce.random(), signature));
     }
 }

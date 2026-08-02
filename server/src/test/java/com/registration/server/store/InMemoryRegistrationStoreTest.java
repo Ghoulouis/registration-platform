@@ -15,44 +15,66 @@ class InMemoryRegistrationStoreTest {
     private final InMemoryRegistrationStore store = new InMemoryRegistrationStore();
 
     @Test
-    void registersNewClient() {
-        assertThat(store.tryRegister(CLIENT_ID, Duration.ofSeconds(60), Nonce.random())).isTrue();
+    void getIsNullForAnUntouchedClientId() {
+        assertThat(store.get(CLIENT_ID)).isNull();
     }
 
     @Test
-    void rejectsDuplicateRegister() {
-        store.tryRegister(CLIENT_ID, Duration.ofSeconds(60), Nonce.random());
+    void issuePendingNonceCreatesAnUnregisteredRecord() {
+        Nonce nonce = store.issuePendingNonce(CLIENT_ID, Duration.ofSeconds(30));
 
-        assertThat(store.tryRegister(CLIENT_ID, Duration.ofSeconds(60), Nonce.random())).isFalse();
+        RegistrationStore.ClientRecord record = store.get(CLIENT_ID);
+        assertThat(record.registered()).isFalse();
+        assertThat(record.nonce()).isEqualTo(nonce);
+        assertThat(record.previousNonce()).isNull();
     }
 
     @Test
-    void nonceStateReflectsInitialNonceWithNoPrevious() {
-        Nonce initialNonce = Nonce.random();
-        store.tryRegister(CLIENT_ID, Duration.ofSeconds(60), initialNonce);
+    void issuingAgainReplacesThePriorPendingNonce() {
+        store.issuePendingNonce(CLIENT_ID, Duration.ofSeconds(30));
+        Nonce second = store.issuePendingNonce(CLIENT_ID, Duration.ofSeconds(30));
 
-        RegistrationStore.NonceState nonceState = store.nonceState(CLIENT_ID);
-
-        assertThat(nonceState.current()).isEqualTo(initialNonce);
-        assertThat(nonceState.previous()).isNull();
+        assertThat(store.get(CLIENT_ID).nonce()).isEqualTo(second);
     }
 
     @Test
-    void nonceStateIsNullForUnregisteredClient() {
-        assertThat(store.nonceState(CLIENT_ID)).isNull();
+    void confirmTransitionsToRegisteredWithNoPreviousNonce() {
+        store.issuePendingNonce(CLIENT_ID, Duration.ofSeconds(30));
+        Nonce confirmedNonce = Nonce.random();
+
+        assertThat(store.confirm(CLIENT_ID, Duration.ofSeconds(60), confirmedNonce)).isTrue();
+
+        RegistrationStore.ClientRecord record = store.get(CLIENT_ID);
+        assertThat(record.registered()).isTrue();
+        assertThat(record.nonce()).isEqualTo(confirmedNonce);
+        assertThat(record.previousNonce()).isNull();
+    }
+
+    @Test
+    void confirmFailsWithoutAPendingRecord() {
+        assertThat(store.confirm(CLIENT_ID, Duration.ofSeconds(60), Nonce.random())).isFalse();
+    }
+
+    @Test
+    void confirmFailsIfAlreadyRegistered() {
+        store.issuePendingNonce(CLIENT_ID, Duration.ofSeconds(30));
+        store.confirm(CLIENT_ID, Duration.ofSeconds(60), Nonce.random());
+
+        assertThat(store.confirm(CLIENT_ID, Duration.ofSeconds(60), Nonce.random())).isFalse();
     }
 
     @Test
     void rotateNonceMovesCurrentToPreviousAndSetsNewCurrent() {
+        store.issuePendingNonce(CLIENT_ID, Duration.ofSeconds(30));
         Nonce initialNonce = Nonce.random();
+        store.confirm(CLIENT_ID, Duration.ofSeconds(60), initialNonce);
         Nonce rotatedNonce = Nonce.random();
-        store.tryRegister(CLIENT_ID, Duration.ofSeconds(60), initialNonce);
 
         assertThat(store.rotateNonce(CLIENT_ID, Duration.ofSeconds(60), rotatedNonce)).isTrue();
 
-        RegistrationStore.NonceState nonceState = store.nonceState(CLIENT_ID);
-        assertThat(nonceState.current()).isEqualTo(rotatedNonce);
-        assertThat(nonceState.previous()).isEqualTo(initialNonce);
+        RegistrationStore.ClientRecord record = store.get(CLIENT_ID);
+        assertThat(record.nonce()).isEqualTo(rotatedNonce);
+        assertThat(record.previousNonce()).isEqualTo(initialNonce);
     }
 
     @Test
@@ -61,35 +83,62 @@ class InMemoryRegistrationStoreTest {
     }
 
     @Test
-    void cancelsRegisteredClient() {
-        store.tryRegister(CLIENT_ID, Duration.ofSeconds(60), Nonce.random());
+    void rejectsRotateOfPendingOnlyClient() {
+        store.issuePendingNonce(CLIENT_ID, Duration.ofSeconds(30));
 
-        assertThat(store.cancel(CLIENT_ID)).isTrue();
-        assertThat(store.tryRegister(CLIENT_ID, Duration.ofSeconds(60), Nonce.random())).isTrue();
+        assertThat(store.rotateNonce(CLIENT_ID, Duration.ofSeconds(60), Nonce.random())).isFalse();
     }
 
     @Test
-    void rejectsCancelOfUnregisteredClient() {
-        assertThat(store.cancel(CLIENT_ID)).isFalse();
+    void removeDeletesARegisteredRecord() {
+        store.issuePendingNonce(CLIENT_ID, Duration.ofSeconds(30));
+        store.confirm(CLIENT_ID, Duration.ofSeconds(60), Nonce.random());
+
+        assertThat(store.remove(CLIENT_ID)).isTrue();
+        assertThat(store.get(CLIENT_ID)).isNull();
     }
 
     @Test
-    void reaperEvictsExpiredRegistrations() throws InterruptedException {
-        store.tryRegister(CLIENT_ID, Duration.ofMillis(1), Nonce.random());
+    void removeDeletesAPendingRecord() {
+        store.issuePendingNonce(CLIENT_ID, Duration.ofSeconds(30));
+
+        assertThat(store.remove(CLIENT_ID)).isTrue();
+        assertThat(store.get(CLIENT_ID)).isNull();
+    }
+
+    @Test
+    void removeOfUntouchedClientIdReturnsFalse() {
+        assertThat(store.remove(CLIENT_ID)).isFalse();
+    }
+
+    @Test
+    void reaperEvictsExpiredPendingNonce() throws InterruptedException {
+        store.issuePendingNonce(CLIENT_ID, Duration.ofMillis(1));
         Thread.sleep(20);
 
         store.reapExpired();
 
-        // If the entry were still present, this REGISTER would fail with ALREADY_REGISTERED-style rejection.
-        assertThat(store.tryRegister(CLIENT_ID, Duration.ofSeconds(60), Nonce.random())).isTrue();
+        assertThat(store.get(CLIENT_ID)).isNull();
     }
 
     @Test
-    void reaperLeavesLiveRegistrationsAlone() {
-        store.tryRegister(CLIENT_ID, Duration.ofSeconds(60), Nonce.random());
+    void reaperEvictsExpiredRegistration() throws InterruptedException {
+        store.issuePendingNonce(CLIENT_ID, Duration.ofSeconds(30));
+        store.confirm(CLIENT_ID, Duration.ofMillis(1), Nonce.random());
+        Thread.sleep(20);
 
         store.reapExpired();
 
-        assertThat(store.tryRegister(CLIENT_ID, Duration.ofSeconds(60), Nonce.random())).isFalse();
+        assertThat(store.get(CLIENT_ID)).isNull();
+    }
+
+    @Test
+    void reaperLeavesLiveRecordsAlone() {
+        store.issuePendingNonce(CLIENT_ID, Duration.ofSeconds(30));
+        store.confirm(CLIENT_ID, Duration.ofSeconds(60), Nonce.random());
+
+        store.reapExpired();
+
+        assertThat(store.get(CLIENT_ID)).isNotNull();
     }
 }

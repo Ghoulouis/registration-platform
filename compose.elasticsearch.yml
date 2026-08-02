@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
+    container_name: registration-elasticsearch
+    environment:
+      - node.name=es01
+      - cluster.name=es-docker-cluster
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+      - xpack.security.enabled=false
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+    networks:
+      - es-net
+    restart: unless-stopped
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.12.0
+    container_name: registration-kibana
+    depends_on:
+      - elasticsearch
+    environment:
+      - SERVER_NAME=kibana
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - XPACK_SECURITY_ENABLED=false
+    ports:
+      - "5601:5601"
+    networks:
+      - es-net
+    restart: unless-stopped
+
+volumes:
+  esdata:
+    driver: local
+
+networks:
+  es-net:
+    driver: bridge

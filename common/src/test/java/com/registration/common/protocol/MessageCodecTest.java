@@ -10,15 +10,16 @@ class MessageCodecTest {
 
     @Test
     void roundTripsInitialRegisterRequest() {
-        RegisterRequest original = RegisterRequest.initial(ClientId.parse("123456789012"));
+        RegisterRequest original = RegisterRequest.initial(ClientId.parse("123456789012"), TraceContext.newTrace());
 
         assertEquals(original, decode(encode(original)));
     }
 
     @Test
-    void roundTripsRegisterRequestWithChallengeResponse() {
-        ChallengeResponse response = ChallengeResponse.of(new byte[ChallengeResponse.LENGTH]);
-        RegisterRequest original = RegisterRequest.withChallengeResponse(ClientId.parse("123456789012"), response);
+    void roundTripsRegisterRequestWithNonceSignature() {
+        NonceSignature signature = NonceSignature.of(new byte[NonceSignature.LENGTH]);
+        RegisterRequest original =
+                RegisterRequest.withNonceSignature(ClientId.parse("123456789012"), TraceContext.newTrace(), signature);
 
         assertEquals(original, decode(encode(original)));
     }
@@ -39,7 +40,7 @@ class MessageCodecTest {
 
     @Test
     void roundTripsRegisterResponseChallenge() {
-        RegisterResponse original = RegisterResponse.challenge(Challenge.random());
+        RegisterResponse original = RegisterResponse.challenge(Nonce.random());
 
         assertEquals(original, decode(encode(original)));
     }
@@ -54,7 +55,7 @@ class MessageCodecTest {
     @Test
     void roundTripsRenewRequest() {
         NonceSignature signature = NonceSignature.of(new byte[NonceSignature.LENGTH]);
-        RenewRequest original = new RenewRequest(ClientId.parse("123456789012"), signature);
+        RenewRequest original = new RenewRequest(ClientId.parse("123456789012"), TraceContext.newTrace(), signature);
 
         assertEquals(original, decode(encode(original)));
     }
@@ -83,7 +84,7 @@ class MessageCodecTest {
     @Test
     void roundTripsCancelRequest() {
         NonceSignature signature = NonceSignature.of(new byte[NonceSignature.LENGTH]);
-        CancelRequest original = new CancelRequest(ClientId.parse("123456789012"), signature);
+        CancelRequest original = new CancelRequest(ClientId.parse("123456789012"), TraceContext.newTrace(), signature);
 
         assertEquals(original, decode(encode(original)));
     }
@@ -111,14 +112,15 @@ class MessageCodecTest {
 
     @Test
     void wireLayoutMatchesHeaderPlusPayload() {
-        RegisterRequest message = RegisterRequest.initial(ClientId.ofRawValue(42L));
+        RegisterRequest message = RegisterRequest.initial(ClientId.ofRawValue(42L), TraceContext.newTrace());
 
         ByteBuffer frame = MessageCodec.encode(message);
 
+        int expectedPayloadLength = 8 + 26; // Client ID + Trace Context (version+traceId+spanId+flags)
         assertEquals(MessageType.REGISTER_REQUEST.code(), frame.get(0));
-        assertEquals(8, frame.getInt(1)); // payload length
+        assertEquals(expectedPayloadLength, frame.getInt(1)); // payload length
         assertEquals(42L, frame.getLong(5));
-        assertEquals(5 + 8, frame.remaining());
+        assertEquals(5 + expectedPayloadLength, frame.remaining());
     }
 
     private static ByteBuffer encode(ProtocolMessage message) {

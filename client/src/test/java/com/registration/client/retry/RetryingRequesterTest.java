@@ -5,7 +5,6 @@ import com.registration.client.stats.OperationType;
 import com.registration.client.stats.Stats;
 import com.registration.client.testsupport.ScriptedTcpServer;
 import com.registration.common.crypto.Ed25519;
-import com.registration.common.protocol.Challenge;
 import com.registration.common.protocol.ClientId;
 import com.registration.common.protocol.Nonce;
 import com.registration.common.protocol.RegisterResponse;
@@ -50,7 +49,7 @@ class RetryingRequesterTest {
     @Test
     void succeedsOnFirstAttempt() throws InterruptedException {
         Nonce nonce = Nonce.random();
-        server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.challenge(Challenge.random())));
+        server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.challenge(Nonce.random())));
         server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.success(60, nonce)));
 
         var response = requester.register(CLIENT_ID, SIGNING_KEY);
@@ -66,7 +65,7 @@ class RetryingRequesterTest {
     void succeedsAfterTimeoutThenRetrySucceeds() throws InterruptedException {
         Nonce nonce = Nonce.random();
         server.enqueue(ScriptedTcpServer.Behavior.dropAfter(TIMEOUT.toMillis() + 100));
-        server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.challenge(Challenge.random())));
+        server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.challenge(Nonce.random())));
         server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.success(60, nonce)));
 
         var response = requester.register(CLIENT_ID, SIGNING_KEY);
@@ -111,7 +110,7 @@ class RetryingRequesterTest {
         // Unlike ALREADY_REGISTERED, CHALLENGE_REJECTED has no ADR-0005 retry exemption:
         // it doesn't mean our own earlier attempt landed.
         server.enqueue(ScriptedTcpServer.Behavior.dropAfter(TIMEOUT.toMillis() + 100));
-        server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.challenge(Challenge.random())));
+        server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.challenge(Nonce.random())));
         server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.challengeRejected()));
 
         var response = requester.register(CLIENT_ID, SIGNING_KEY);

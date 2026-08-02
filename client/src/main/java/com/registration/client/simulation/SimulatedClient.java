@@ -2,15 +2,12 @@ package com.registration.client.simulation;
 
 import com.registration.client.retry.CallFailedException;
 import com.registration.client.retry.RetryingRequester;
-import com.registration.client.stats.OperationType;
 import com.registration.common.crypto.Ed25519;
-import com.registration.common.protocol.CancelRequest;
 import com.registration.common.protocol.CancelResponse;
 import com.registration.common.protocol.ClientId;
 import com.registration.common.protocol.Nonce;
 import com.registration.common.protocol.NonceSignature;
 import com.registration.common.protocol.RegisterResponse;
-import com.registration.common.protocol.RenewRequest;
 import com.registration.common.protocol.RenewResponse;
 import com.registration.common.protocol.StatusCode;
 import org.slf4j.Logger;
@@ -101,7 +98,7 @@ public final class SimulatedClient implements Runnable {
             return assumedValidityPeriodSeconds;
         }
         // CHALLENGE_REJECTED: genuinely failed to authenticate (expired or already-consumed
-        // Challenge) — unlike ALREADY_REGISTERED, this isn't our own earlier attempt landing.
+        // pending Nonce) — unlike ALREADY_REGISTERED, this isn't our own earlier attempt landing.
         throw new CallFailedException("REGISTER challenge rejected");
     }
 
@@ -109,7 +106,7 @@ public final class SimulatedClient implements Runnable {
         NonceSignature signature = Ed25519.sign(signingKey, currentNonce);
         RenewResponse response;
         try {
-            response = (RenewResponse) requester.send(OperationType.RENEW, new RenewRequest(clientId, signature));
+            response = requester.renew(clientId, signature);
         } catch (CallFailedException e) {
             throw new RenewalFailedException(e.getMessage());
         }
@@ -124,8 +121,7 @@ public final class SimulatedClient implements Runnable {
     private void cancel() {
         try {
             NonceSignature signature = Ed25519.sign(signingKey, currentNonce);
-            CancelResponse response =
-                    (CancelResponse) requester.send(OperationType.CANCEL, new CancelRequest(clientId, signature));
+            CancelResponse response = requester.cancel(clientId, signature);
             log.info("[{}] CANCEL returned {}", clientId, response.status());
         } catch (CallFailedException e) {
             log.debug("[{}] CANCEL failed (best-effort during shutdown): {}", clientId, e.getMessage());

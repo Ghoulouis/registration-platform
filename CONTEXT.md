@@ -7,7 +7,7 @@ A Client/Server system simulating registration and active-state maintenance of u
 ### Core
 
 **Client**:
-A process that registers with the Server and periodically sends a Renewal before its Registration's Validity Period lapses. Holds no persistent connection — each Renewal or Cancellation is one short-lived connection: connect, send, receive response, disconnect. A Register attempt is two such connections in sequence (get a Challenge, then submit a Challenge Response), never one held open across both (ADR-0009). The Server does hold state tied to the Client between calls (the current Nonce, ADR-0010) — but that's server-assigned per-Registration state, not a persistent connection or anything resembling a Session.
+A process that registers with the Server and periodically sends a Renewal before its Registration's Validity Period lapses. Holds no persistent connection — each Renewal or Cancellation is one short-lived connection: connect, send, receive response, disconnect. A Register attempt is two such connections in sequence (get a Nonce to sign, then submit a Nonce Signature), never one held open across both (ADR-0009). The Server does hold state tied to the Client between calls (the current Nonce, ADR-0010/0011) — but that's server-assigned state, not a persistent connection or anything resembling a Session.
 _Avoid_: Session
 
 **Client ID**:
@@ -44,24 +44,25 @@ The Server's removal of a Client's Registration after its Validity Period lapses
 A Client's voluntary request to remove its own Registration before its Validity Period lapses (ADR-0004), authenticated the same way as a Renewal — a Nonce Signature (ADR-0010). Distinct from Expiration: Cancellation is Client-driven and immediate; Expiration is Server-driven and timeout-based.
 _Avoid_: Unregister, Deregister
 
-**Challenge**:
-A random 32-byte value the Server generates and holds (in the Challenge Store) when a Client ID with no live Registration sends its initial Register attempt. Expires after 30 seconds and is discarded after any verification attempt, success or failure — never reusable (ADR-0009). Distinct from Nonce: a Challenge exists only before a Registration does and is used exactly once; a Nonce exists only while a Registration is live and rotates.
-
-**Challenge Response**:
-The Ed25519 signature over a Challenge, computed by the Client with the Shared Signing Key's private key, submitted back to the Server to complete Registration. Verified against the Shared Signing Key's public key. Distinct from the many `*Response` protocol messages (`RegisterResponse`, etc.) — this is the signature itself, one field within a Register attempt's second request.
-_Avoid_: Response (ambiguous with protocol message names), Signature (use in implementation, not as the glossary term)
-
-**Challenge Store**:
-The Server's in-memory store of issued, not-yet-verified Challenges, keyed by Client ID.
-
 **Shared Signing Key**:
-The single Ed25519 keypair configured for a Client Simulator run: every Simulated Client signs its Challenge with the same private key, and the Server verifies every Challenge Response against the same public key. Not a per-Client credential — this simulates the challenge-response mechanism, not a multi-tenant identity system (ADR-0009). Also used to produce every Nonce Signature (ADR-0010) — the same keypair authenticates Register, Renewal, and Cancellation.
+The single Ed25519 keypair configured for a Client Simulator run: every Simulated Client signs its Nonce with the same private key, and the Server verifies every Nonce Signature against the same public key. Not a per-Client credential — this simulates the mechanism, not a multi-tenant identity system (ADR-0009). The same keypair authenticates Register, Renewal, and Cancellation (ADR-0011).
 
 **Nonce**:
-A random 32-byte value the Server holds for a live Registration, distinct from Challenge: issued fresh when Register succeeds, replaced by a new one on every successful Renewal, and discarded when the Registration is cancelled or expires. A Renewal or Cancellation must carry a Nonce Signature proving the Client holds the Shared Signing Key (ADR-0010).
+A random 32-byte value the Server holds per Client ID, one record spanning two lifecycle phases (ADR-0011): PENDING (issued for an unconfirmed Register attempt, short-lived, discarded after any verification attempt) and CONFIRMED (tied to a live Registration, replaced by a new one on every successful Renewal, discarded on Cancellation or Expiration). A Register, Renewal, or Cancellation must carry a Nonce Signature proving the Client holds the Shared Signing Key.
+_Avoid_: Challenge (an earlier, separate concept for the PENDING phase only — merged into Nonce by ADR-0011)
 
 **Nonce Signature**:
-The Ed25519 signature over the current Nonce, computed by the Client with the Shared Signing Key's private key, submitted as the Renewal's or Cancellation's authentication credential. Verified against the Shared Signing Key's public key, same as a Challenge Response — but over a Nonce instead of a Challenge.
+The Ed25519 signature over the current Nonce, computed by the Client with the Shared Signing Key's private key, submitted as the authentication credential for the second step of Register, a Renewal, or a Cancellation. Verified against the Shared Signing Key's public key.
+_Avoid_: Response (ambiguous with the many `*Response` protocol messages), Signature (use in implementation, not as the glossary term)
+
+### Observability
+
+**Trace ID**:
+A 16-byte identifier for one logical Register, Renewal, or Cancellation attempt as `RetryingRequester` sees it (ADR-0012, W3C Trace Context). Generated once per `register()`/`renew()`/`send()` call and shared across every retry and, for Register, both of its two legs — so every log line produced while working on that one attempt can be tied back together.
+
+**Span ID**:
+An 8-byte identifier for one specific connection attempt within a Trace (ADR-0012). The Client generates a fresh Span ID for every attempt — each retry, each Register leg — while the Trace ID stays constant. The Server logs using the Span ID it received rather than minting its own child span; there's no further downstream hop in this system to justify one.
+_Avoid_: Correlation ID (the generic term; this project uses the W3C Trace Context vocabulary specifically, for interop with standard observability tooling)
 
 ### Client Simulator
 

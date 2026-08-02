@@ -12,7 +12,7 @@ public record RegistrationProperties(
         @DefaultValue("9001") int tcpPort,
         @DefaultValue("60") int validityPeriodSeconds,
         @DefaultValue("1000") long reaperIntervalMillis,
-        @DefaultValue("30") int challengeTtlSeconds,
+        @DefaultValue("30") int pendingNonceTtlSeconds,
         // Demo Shared Signing Key public half (ADR-0009) — matches the Client's default
         // authPrivateKey. Not for production use; override both to use a real keypair.
         @DefaultValue("OyqZa3x46M9IqazQAsypDYZr244z47nMSQVPmoK7Kcw=") String authPublicKey) {

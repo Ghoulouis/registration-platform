@@ -14,6 +14,10 @@ public final class MessageCodec {
     private static final int CLIENT_ID_PAYLOAD_LENGTH = 8;
     private static final int STATUS_ONLY_PAYLOAD_LENGTH = 1;
     private static final int VALIDITY_PERIOD_LENGTH = 2;
+    private static final int TRACE_VERSION_LENGTH = 1;
+    private static final int TRACE_FLAGS_LENGTH = 1;
+    private static final int TRACE_CONTEXT_LENGTH =
+            TRACE_VERSION_LENGTH + TraceContext.TRACE_ID_LENGTH + TraceContext.SPAN_ID_LENGTH + TRACE_FLAGS_LENGTH;
 
     private MessageCodec() {
     }
@@ -54,12 +58,13 @@ public final class MessageCodec {
     // ---- REGISTER_REQUEST ----
 
     private static ByteBuffer writeRegisterRequest(RegisterRequest request) {
-        boolean hasResponse = request.hasChallengeResponse();
-        int length = CLIENT_ID_PAYLOAD_LENGTH + (hasResponse ? ChallengeResponse.LENGTH : 0);
+        boolean hasSignature = request.hasNonceSignature();
+        int length = CLIENT_ID_PAYLOAD_LENGTH + TRACE_CONTEXT_LENGTH + (hasSignature ? NonceSignature.LENGTH : 0);
         ByteBuffer buffer = ByteBuffer.allocate(length);
         buffer.putLong(request.clientId().rawValue());
-        if (hasResponse) {
-            buffer.put(request.challengeResponse().value());
+        writeTraceContext(buffer, request.traceContext());
+        if (hasSignature) {
+            buffer.put(request.nonceSignature().value());
         }
         buffer.flip();
         return buffer;
@@ -67,14 +72,16 @@ public final class MessageCodec {
 
     private static RegisterRequest readRegisterRequest(ByteBuffer payload) {
         ClientId clientId = readClientId(payload);
+        TraceContext traceContext = readTraceContext(payload);
         if (payload.remaining() == 0) {
-            return RegisterRequest.initial(clientId);
+            return RegisterRequest.initial(clientId, traceContext);
         }
-        if (payload.remaining() != ChallengeResponse.LENGTH) {
+        if (payload.remaining() != NonceSignature.LENGTH) {
             throw new IllegalArgumentException(
-                    "Malformed REGISTER_REQUEST payload: " + payload.remaining() + " bytes after Client ID");
+                    "Malformed REGISTER_REQUEST payload: " + payload.remaining() + " bytes after Client ID + Trace Context");
         }
-        return RegisterRequest.withChallengeResponse(clientId, ChallengeResponse.of(readBytes(payload, ChallengeResponse.LENGTH)));
+        return RegisterRequest.withNonceSignature(
+                clientId, traceContext, NonceSignature.of(readBytes(payload, NonceSignature.LENGTH)));
     }
 
     // ---- REGISTER_RESPONSE ----
@@ -95,9 +102,9 @@ public final class MessageCodec {
                 yield b;
             }
             case CHALLENGE -> {
-                ByteBuffer b = ByteBuffer.allocate(STATUS_ONLY_PAYLOAD_LENGTH + Challenge.LENGTH);
+                ByteBuffer b = ByteBuffer.allocate(STATUS_ONLY_PAYLOAD_LENGTH + Nonce.LENGTH);
                 b.put(response.status().code());
-                b.put(response.challenge().value());
+                b.put(response.nonce().value());
                 yield b;
             }
             case CHALLENGE_REJECTED -> {
@@ -120,7 +127,7 @@ public final class MessageCodec {
                 yield RegisterResponse.success(validityPeriod, Nonce.of(readBytes(payload, Nonce.LENGTH)));
             }
             case ALREADY_REGISTERED -> RegisterResponse.alreadyRegistered(Nonce.of(readBytes(payload, Nonce.LENGTH)));
-            case CHALLENGE -> RegisterResponse.challenge(Challenge.of(readBytes(payload, Challenge.LENGTH)));
+            case CHALLENGE -> RegisterResponse.challenge(Nonce.of(readBytes(payload, Nonce.LENGTH)));
             case CHALLENGE_REJECTED -> RegisterResponse.challengeRejected();
             case NOT_REGISTERED, INVALID_TOKEN ->
                     throw new IllegalArgumentException("REGISTER_RESPONSE cannot carry " + status);
@@ -130,8 +137,9 @@ public final class MessageCodec {
     // ---- RENEW_REQUEST ----
 
     private static ByteBuffer writeRenewRequest(RenewRequest request) {
-        ByteBuffer buffer = ByteBuffer.allocate(CLIENT_ID_PAYLOAD_LENGTH + NonceSignature.LENGTH);
+        ByteBuffer buffer = ByteBuffer.allocate(CLIENT_ID_PAYLOAD_LENGTH + TRACE_CONTEXT_LENGTH + NonceSignature.LENGTH);
         buffer.putLong(request.clientId().rawValue());
+        writeTraceContext(buffer, request.traceContext());
         buffer.put(request.nonceSignature().value());
         buffer.flip();
         return buffer;
@@ -139,7 +147,8 @@ public final class MessageCodec {
 
     private static RenewRequest readRenewRequest(ByteBuffer payload) {
         ClientId clientId = readClientId(payload);
-        return new RenewRequest(clientId, NonceSignature.of(readBytes(payload, NonceSignature.LENGTH)));
+        TraceContext traceContext = readTraceContext(payload);
+        return new RenewRequest(clientId, traceContext, NonceSignature.of(readBytes(payload, NonceSignature.LENGTH)));
     }
 
     // ---- RENEW_RESPONSE ----
@@ -188,8 +197,9 @@ public final class MessageCodec {
     // ---- CANCEL_REQUEST ----
 
     private static ByteBuffer writeCancelRequest(CancelRequest request) {
-        ByteBuffer buffer = ByteBuffer.allocate(CLIENT_ID_PAYLOAD_LENGTH + NonceSignature.LENGTH);
+        ByteBuffer buffer = ByteBuffer.allocate(CLIENT_ID_PAYLOAD_LENGTH + TRACE_CONTEXT_LENGTH + NonceSignature.LENGTH);
         buffer.putLong(request.clientId().rawValue());
+        writeTraceContext(buffer, request.traceContext());
         buffer.put(request.nonceSignature().value());
         buffer.flip();
         return buffer;
@@ -197,7 +207,8 @@ public final class MessageCodec {
 
     private static CancelRequest readCancelRequest(ByteBuffer payload) {
         ClientId clientId = readClientId(payload);
-        return new CancelRequest(clientId, NonceSignature.of(readBytes(payload, NonceSignature.LENGTH)));
+        TraceContext traceContext = readTraceContext(payload);
+        return new CancelRequest(clientId, traceContext, NonceSignature.of(readBytes(payload, NonceSignature.LENGTH)));
     }
 
     // ---- CANCEL_RESPONSE ----
@@ -251,5 +262,20 @@ public final class MessageCodec {
         byte[] bytes = new byte[length];
         payload.get(bytes);
         return bytes;
+    }
+
+    private static void writeTraceContext(ByteBuffer buffer, TraceContext traceContext) {
+        buffer.put((byte) 0x00); // version - reserved, always 0 (W3C Trace Context, ADR-0012)
+        buffer.put(traceContext.traceId());
+        buffer.put(traceContext.spanId());
+        buffer.put(traceContext.flags());
+    }
+
+    private static TraceContext readTraceContext(ByteBuffer payload) {
+        payload.get(); // version - reserved, unused
+        byte[] traceId = readBytes(payload, TraceContext.TRACE_ID_LENGTH);
+        byte[] spanId = readBytes(payload, TraceContext.SPAN_ID_LENGTH);
+        byte flags = payload.get();
+        return TraceContext.of(traceId, spanId, flags);
     }
 }

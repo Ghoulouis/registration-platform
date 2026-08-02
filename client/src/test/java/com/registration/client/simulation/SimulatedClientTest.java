@@ -7,7 +7,6 @@ import com.registration.client.stats.Stats;
 import com.registration.client.testsupport.ScriptedTcpServer;
 import com.registration.common.crypto.Ed25519;
 import com.registration.common.protocol.CancelResponse;
-import com.registration.common.protocol.Challenge;
 import com.registration.common.protocol.ClientId;
 import com.registration.common.protocol.Nonce;
 import com.registration.common.protocol.RegisterResponse;
@@ -49,7 +48,7 @@ class SimulatedClientTest {
         // Validity period 0 makes the first renewal fire immediately (0 * any% = 0 delay);
         // the renewed period of 10s then pushes the *next* renewal ~9-9.9s out, well past
         // this test's interrupt, so exactly one deterministic RENEW happens.
-        server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.challenge(Challenge.random())));
+        server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.challenge(Nonce.random())));
         server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.success(0, Nonce.random())));
         server.enqueue(ScriptedTcpServer.Behavior.respond(RenewResponse.success(10, Nonce.random())));
         server.enqueue(ScriptedTcpServer.Behavior.respond(CancelResponse.success()));
@@ -69,7 +68,7 @@ class SimulatedClientTest {
 
     @Test
     void cancelsOnInterruptWhileWaitingForRenewalWindow() throws InterruptedException {
-        server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.challenge(Challenge.random())));
+        server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.challenge(Nonce.random())));
         server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.success(10, Nonce.random())));
         server.enqueue(ScriptedTcpServer.Behavior.respond(CancelResponse.success()));
 
@@ -87,7 +86,7 @@ class SimulatedClientTest {
 
     @Test
     void stopsWithoutCancelWhenRenewIsRejected() throws InterruptedException {
-        server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.challenge(Challenge.random())));
+        server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.challenge(Nonce.random())));
         server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.success(0, Nonce.random())));
         server.enqueue(ScriptedTcpServer.Behavior.respond(RenewResponse.notRegistered()));
 
@@ -101,7 +100,7 @@ class SimulatedClientTest {
 
     @Test
     void stopsWithoutCancelWhenChallengeIsRejected() throws InterruptedException {
-        server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.challenge(Challenge.random())));
+        server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.challenge(Nonce.random())));
         server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.challengeRejected()));
 
         SimulatedClient client = newClient(0, 90, 99);

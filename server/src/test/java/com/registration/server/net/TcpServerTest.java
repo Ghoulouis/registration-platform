@@ -14,9 +14,9 @@ import com.registration.common.protocol.RegisterResponse;
 import com.registration.common.protocol.RenewRequest;
 import com.registration.common.protocol.RenewResponse;
 import com.registration.common.protocol.StatusCode;
+import com.registration.common.protocol.TraceContext;
 import com.registration.server.config.RegistrationProperties;
 import com.registration.server.domain.RegistrationService;
-import com.registration.server.store.InMemoryChallengeStore;
 import com.registration.server.store.InMemoryRegistrationStore;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -47,8 +47,7 @@ class TcpServerTest {
     void startServer() throws IOException {
         int port = findFreePort();
         properties = new RegistrationProperties(port, VALIDITY_PERIOD_SECONDS, 1000, 30, PUBLIC_KEY_B64);
-        RegistrationService registrationService =
-                new RegistrationService(new InMemoryRegistrationStore(), new InMemoryChallengeStore(), properties);
+        RegistrationService registrationService = new RegistrationService(new InMemoryRegistrationStore(), properties);
         server = new TcpServer(properties, registrationService);
         server.start();
         signingKey = Ed25519.parsePrivateKey(PRIVATE_SEED_B64);
@@ -76,7 +75,7 @@ class TcpServerTest {
         ClientId clientId = ClientId.parse("111111111111");
         register(clientId);
 
-        RegisterResponse response = (RegisterResponse) send(RegisterRequest.initial(clientId));
+        RegisterResponse response = (RegisterResponse) send(RegisterRequest.initial(clientId, TraceContext.newTrace()));
 
         assertThat(response.status()).isEqualTo(StatusCode.ALREADY_REGISTERED);
     }
@@ -105,19 +104,19 @@ class TcpServerTest {
     }
 
     private RegisterResponse register(ClientId clientId) throws IOException {
-        RegisterResponse challengeResponse = (RegisterResponse) send(RegisterRequest.initial(clientId));
-        var signature = Ed25519.sign(signingKey, challengeResponse.challenge());
-        return (RegisterResponse) send(RegisterRequest.withChallengeResponse(clientId, signature));
+        RegisterResponse challengeResponse = (RegisterResponse) send(RegisterRequest.initial(clientId, TraceContext.newTrace()));
+        var signature = Ed25519.sign(signingKey, challengeResponse.nonce());
+        return (RegisterResponse) send(RegisterRequest.withNonceSignature(clientId, TraceContext.newTrace(), signature));
     }
 
     private RenewResponse renew(ClientId clientId, Nonce nonceToSign) throws IOException {
         NonceSignature signature = Ed25519.sign(signingKey, nonceToSign);
-        return (RenewResponse) send(new RenewRequest(clientId, signature));
+        return (RenewResponse) send(new RenewRequest(clientId, TraceContext.newTrace(), signature));
     }
 
     private CancelResponse cancel(ClientId clientId, Nonce nonceToSign) throws IOException {
         NonceSignature signature = Ed25519.sign(signingKey, nonceToSign);
-        return (CancelResponse) send(new CancelRequest(clientId, signature));
+        return (CancelResponse) send(new CancelRequest(clientId, TraceContext.newTrace(), signature));
     }
 
     private ProtocolMessage send(ProtocolMessage request) throws IOException {
