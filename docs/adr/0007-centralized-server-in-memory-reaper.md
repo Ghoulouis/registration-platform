@@ -1,0 +1,10 @@
+# Centralized Server: NIO retained, in-memory store + reaper thread replaces Redis
+
+The `server` module is a second Server implementation (Centralized Server), alongside the existing `server-distribute` (Distributed Server) — both speak the identical wire protocol from `common`, so a Client can't tell which one it's talking to. Centralized Server runs as a single node with Registration state in local process memory instead of Redis, but still targets the same 1-million-Client scale as the Distributed Server.
+
+We kept the single-threaded NIO Selector event loop from ADR-0001 rather than switching to a simpler thread-per-connection model. A thread-per-connection design was the initial recommendation specifically *because* this variant is meant to be simpler — but the 1-million-connection target was confirmed unchanged, and that's the same reason ADR-0001 rejected thread-per-connection in the first place: a thread per concurrent connection doesn't hold up at that volume, regardless of whether the node is standalone or one of many pods.
+
+Redis gave the Distributed Server two things for free via `SET NX EX` / `SET XX EX` (ADR-0002): atomic create-only/extend-only semantics, and automatic Expiration via key TTL. Replacing it in-process:
+
+- **Atomicity**: `ConcurrentHashMap<ClientId, Instant>` (Client ID → expiry time) using `putIfAbsent` for REGISTER (create-only) and `computeIfPresent`/`replace` for RENEW (extend-only) — the same atomicity guarantee, just via `java.util.concurrent` instead of Redis commands.
+- **Expiration**: no TTL to lean on, so a dedicated single-thread `ScheduledExecutorService` periodically scans the map and evicts lapsed entries. This reaper is deliberately isolated from both the NIO reactor thread and the request-handling worker pool — a periodic full-table scan, even at ~1M entries, is cheap (single-digit milliseconds), but running it on the reactor thread would still introduce periodic latency spikes for connection handling, which is exactly what ADR-0001 already established the reactor thread must never do.

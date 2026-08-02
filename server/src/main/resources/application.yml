@@ -1,0 +1,8 @@
+spring:
+  application:
+    name: registration-service-standalone
+
+registration:
+  tcp-port: 9000
+  validity-period-seconds: 60
+  reaper-interval-millis: 1000

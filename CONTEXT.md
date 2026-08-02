@@ -1,6 +1,6 @@
 # Registration Platform
 
-A Client/Server system simulating registration and active-state maintenance of up to 1 million clients, designed to run as a stateless, horizontally-scaled fleet behind a Kubernetes Horizontal Pod Autoscaler, communicating over a custom TCP-based protocol.
+A Client/Server system simulating registration and active-state maintenance of up to 1 million clients, communicating over a custom TCP-based protocol. Two interchangeable Server implementations exist — see Distributed Server and Centralized Server.
 
 ## Language
 
@@ -15,8 +15,16 @@ A 12-character numeric string, chosen by the Client itself, that identifies it u
 _Avoid_: Session ID, Client Name
 
 **Server**:
-The logical service that accepts Client registrations and maintains their active state — implemented as a fleet of stateless pod replicas behind a Kubernetes Horizontal Pod Autoscaler. Any pod can service any Client's Register or Renewal call, because Registration state is shared across pods via Redis rather than held in pod memory.
-_Avoid_: Node, Instance, Pod (when referring to the logical service as a whole)
+The logical role that accepts Client registrations and maintains their active state, speaking the same wire protocol regardless of which implementation is running. Two interchangeable implementations exist: Distributed Server and Centralized Server. A Client cannot tell which one it's talking to.
+_Avoid_: Node, Instance, Pod (when referring to the logical role as a whole)
+
+**Distributed Server**:
+The Server implementation that runs as a fleet of stateless pod replicas behind a Kubernetes Horizontal Pod Autoscaler (module `server-distribute`, aggregator artifact `dserver`, running artifact `registration-service`). Any pod can service any Client's call, because Registration state is shared across pods via Redis (ADR-0002) rather than held in pod memory. Expiration is driven entirely by Redis's own key TTL.
+_Avoid_: server-distribute (when naming the concept rather than the module)
+
+**Centralized Server**:
+The Server implementation that runs as a single node holding Registration state in local process memory (module `server`, artifact `com.registration.server`). Targets the same 1-million-Client scale as the Distributed Server, but on one node rather than a horizontally-scaled fleet — a single-threaded NIO Selector event loop still multiplexes the connections (ADR-0001 applies to both implementations). Expiration is driven by a dedicated reaper thread that periodically scans for lapsed Registrations, since there's no Redis TTL to rely on.
+_Avoid_: server (when naming the concept rather than the module), standalone server
 
 **Registration**:
 A Client's claim, held by the Server, that it is active. Valid only for its Validity Period unless renewed. Created only by the Client sending a register message; never created or extended by the Server on its own initiative.
@@ -30,7 +38,7 @@ _Avoid_: Lease, TTL, Timeout
 A message a Client sends before its Validity Period lapses, extending its Registration for another Validity Period. Uses the same Client ID as the original Registration.
 
 **Expiration**:
-The Server's removal of a Client's Registration after its Validity Period lapses with no Renewal — driven entirely by Redis's own key TTL, not by any Client message. Distinct from Cancellation, which is Client-initiated.
+The Server's removal of a Client's Registration after its Validity Period lapses with no Renewal — never driven by any Client message. The mechanism differs by implementation: Redis key TTL for the Distributed Server, a dedicated reaper thread for the Centralized Server. Distinct from Cancellation, which is Client-initiated.
 
 **Cancellation**:
 A Client's voluntary request to remove its own Registration before its Validity Period lapses (ADR-0004). Distinct from Expiration: Cancellation is Client-driven and immediate; Expiration is Server-driven and timeout-based.
