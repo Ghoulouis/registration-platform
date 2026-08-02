@@ -1,0 +1,12 @@
+spring:
+  application:
+    name: registration-service
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+registration:
+  tcp-port: 9000
+  validity-period-seconds: 60
+  worker-pool-size: 16

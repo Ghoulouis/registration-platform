@@ -1,0 +1,3 @@
+# Registration state shared via Redis, Server pods stateless
+
+The Server runs as a fleet of pod replicas behind a Kubernetes Horizontal Pod Autoscaler, so pods are created and destroyed as load changes. If each pod held Registration state only in its own memory, a Client's Registration would be lost whenever the pod handling it was scaled down, and only that one pod could validate or renew it. We chose to store all Registration state in Redis, shared across every pod, so that any pod can service any Client's Register or Renewal call and pod churn from autoscaling doesn't lose or strand Registration state. The trade-off is a network hop to Redis on every Register/Renewal instead of an in-memory lookup.

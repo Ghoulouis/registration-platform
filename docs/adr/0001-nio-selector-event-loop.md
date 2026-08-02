@@ -1,0 +1,3 @@
+# Single-threaded NIO/Selector event loop instead of thread-per-client
+
+The Server must handle up to 1 million Clients, each interacting via short-lived, one-shot TCP connections (connect, send Register/Renewal, receive response, disconnect) rather than persistent sessions. A thread-per-client model would need a thread per concurrent connection setup/teardown at this scale, which doesn't hold up under bursty load. We chose a single-threaded NIO Selector event loop per pod to multiplex many concurrent connections cheaply, accepting the added complexity of non-blocking reads and partial-frame buffering in exchange for scaling to this connection volume without a thread explosion.
