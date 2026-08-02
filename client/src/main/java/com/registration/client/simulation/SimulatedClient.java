@@ -60,12 +60,12 @@ public final class SimulatedClient implements Runnable {
         try {
             while (true) {
                 Thread.sleep(renewalDelayMillis(validityPeriodSeconds));
-                validityPeriodSeconds = renew();
+                validityPeriodSeconds = renewOrReregister();
             }
         } catch (InterruptedException e) {
             // shutdown signal: fall through to voluntary Cancellation
-        } catch (RenewalFailedException e) {
-            log.debug("[{}] RENEW failed, giving up: {}", clientId, e.getMessage());
+        } catch (CallFailedException e) {
+            log.debug("[{}] Giving up: {}", clientId, e.getMessage());
             return; // not confident we're still registered; don't attempt to cancel
         }
 
@@ -88,18 +88,17 @@ public final class SimulatedClient implements Runnable {
         return assumedValidityPeriodSeconds;
     }
 
-    private int renew() throws InterruptedException {
-        RenewResponse response;
-        try {
-            response = (RenewResponse) requester.send(OperationType.RENEW, new RenewRequest(clientId));
-        } catch (CallFailedException e) {
-            throw new RenewalFailedException(e.getMessage());
+    /** RENEW; if the Registration was lost (NOT_REGISTERED), transparently REGISTER again. */
+    private int renewOrReregister() throws InterruptedException {
+        RenewResponse response = (RenewResponse) requester.send(OperationType.RENEW, new RenewRequest(clientId));
+        if (response.status() == StatusCode.SUCCESS) {
+            log.debug("[{}] RENEW succeeded, validity period {}s", clientId, response.validityPeriodSeconds());
+            return response.validityPeriodSeconds();
         }
-        if (response.status() != StatusCode.SUCCESS) {
-            throw new RenewalFailedException("Server returned " + response.status());
-        }
-        log.debug("[{}] RENEW succeeded, validity period {}s", clientId, response.validityPeriodSeconds());
-        return response.validityPeriodSeconds();
+        // NOT_REGISTERED: our Registration expired or was otherwise lost. Re-register rather
+        // than giving up, so a long-running Simulated Client recovers instead of dying outright.
+        log.debug("[{}] RENEW returned NOT_REGISTERED, registering again", clientId);
+        return register();
     }
 
     private void cancel() {
@@ -119,11 +118,5 @@ public final class SimulatedClient implements Runnable {
         double maxFraction = renewalWindowMaxPercent / 100.0;
         double fraction = ThreadLocalRandom.current().nextDouble(minFraction, maxFraction);
         return (long) (validityPeriodSeconds * 1000L * fraction);
-    }
-
-    private static final class RenewalFailedException extends RuntimeException {
-        RenewalFailedException(String message) {
-            super(message);
-        }
     }
 }

@@ -77,13 +77,38 @@ class SimulatedClientTest {
     }
 
     @Test
-    void stopsWithoutCancelWhenRenewIsRejected() throws InterruptedException {
+    void reregistersWhenRenewReturnsNotRegistered() throws InterruptedException {
+        // Registration lost between renewals (e.g. expired): the Simulated Client should
+        // recover by registering again rather than giving up.
         server.enqueue(ScriptedTcpServer.Behavior.respond(new RegisterResponse(StatusCode.SUCCESS, 0)));
         server.enqueue(ScriptedTcpServer.Behavior.respond(new RenewResponse(StatusCode.NOT_REGISTERED, 0)));
+        server.enqueue(ScriptedTcpServer.Behavior.respond(new RegisterResponse(StatusCode.SUCCESS, 10)));
+        server.enqueue(ScriptedTcpServer.Behavior.respond(new CancelResponse(StatusCode.SUCCESS)));
 
         SimulatedClient client = newClient(0, 90, 99);
         Thread thread = Thread.ofVirtual().start(client);
+
+        Thread.sleep(300); // let REGISTER -> RENEW(NOT_REGISTERED) -> REGISTER again happen
+        thread.interrupt();
         thread.join(Duration.ofSeconds(2).toMillis());
+
+        assertThat(thread.isAlive()).isFalse();
+        assertThat(stats.forType(OperationType.REGISTER).snapshot().successes()).isEqualTo(2);
+        assertThat(stats.forType(OperationType.RENEW).snapshot().failures()).isEqualTo(1);
+        assertThat(stats.forType(OperationType.CANCEL).snapshot().successes()).isEqualTo(1);
+    }
+
+    @Test
+    void stopsWithoutCancelWhenReregisterAlsoFails() throws InterruptedException {
+        server.enqueue(ScriptedTcpServer.Behavior.respond(new RegisterResponse(StatusCode.SUCCESS, 0)));
+        server.enqueue(ScriptedTcpServer.Behavior.respond(new RenewResponse(StatusCode.NOT_REGISTERED, 0)));
+        for (int i = 0; i < 3; i++) {
+            server.enqueue(ScriptedTcpServer.Behavior.dropAfter(600));
+        }
+
+        SimulatedClient client = newClient(0, 90, 99);
+        Thread thread = Thread.ofVirtual().start(client);
+        thread.join(Duration.ofSeconds(3).toMillis());
 
         assertThat(thread.isAlive()).isFalse();
         assertThat(stats.forType(OperationType.CANCEL).snapshot().totalAttempts()).isEqualTo(0);
