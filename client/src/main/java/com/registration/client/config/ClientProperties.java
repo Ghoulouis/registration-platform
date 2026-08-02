@@ -14,6 +14,7 @@ public record ClientProperties(
         @DefaultValue("normal") Mode mode,
         @DefaultValue("1") int simulatedClients,
         @DefaultValue("10") double registerRatePerSecond,
+        @DefaultValue("60") int benchmarkDurationSeconds,
         @DefaultValue("60") int assumedValidityPeriodSeconds,
         @DefaultValue("60") int renewalWindowMinPercent,
         @DefaultValue("90") int renewalWindowMaxPercent,
@@ -29,6 +30,10 @@ public record ClientProperties(
         if (registerRatePerSecond <= 0) {
             throw new IllegalArgumentException(
                     "client.register-rate-per-second must be positive: " + registerRatePerSecond);
+        }
+        if (benchmarkDurationSeconds < 1) {
+            throw new IllegalArgumentException(
+                    "client.benchmark-duration-seconds must be at least 1: " + benchmarkDurationSeconds);
         }
         if (renewalWindowMinPercent < 0 || renewalWindowMaxPercent > 99
                 || renewalWindowMinPercent >= renewalWindowMaxPercent) {

@@ -54,7 +54,35 @@ The Client Simulator runs a single Simulated Client indefinitely, for manual tes
 _Avoid_: Standalone mode
 
 **Benchmark Mode**:
-The Client Simulator runs a configured number of Simulated Clients concurrently, ramping up Register calls at a configured rate, and reports aggregate statistics across all of them.
+The Client Simulator runs a configured number of Simulated Clients concurrently, ramping up Register calls at a configured rate, and reports aggregate statistics across all of them for a configured Benchmark Duration, after which it runs the same graceful shutdown as a Ctrl+C (every Simulated Client sends its voluntary Cancellation per ADR-0004, final stats are printed) and the process exits on its own.
+
+**Benchmark Duration**:
+The configured length of time a Client Simulator in Benchmark Mode runs before self-terminating. Distinct from Normal Mode, which always runs until killed.
 
 **Renewal Window**:
 The `[min%, max%]` range of a Registration's Validity Period within which a Simulated Client schedules its next Renewal. Drawn once, uniformly at random, right after the Client learns its current Validity Period — not re-randomized on every tick. Exists to avoid many Simulated Clients renewing in lockstep against the Server.
+
+### Benchmark Harness
+
+**Benchmark Harness**:
+The Python tool (`benchmark/benchmark.py`) that orchestrates a full Benchmark Run: starts a Server, starts a Client Simulator in Benchmark Mode against it, profiles both processes' hardware resource usage (CPU, RAM) throughout, and produces a report. Distinct from Benchmark Mode, which is the Client-side load-generation behavior the Harness merely invokes.
+_Avoid_: benchmark script, load test (when referring to the tool itself)
+
+**Benchmark Run**:
+One execution of the Benchmark Harness, configured by a Resource Profile and a Load Profile: start Server, wait (Idle), start Client in Benchmark Mode, sample both processes until the Client self-terminates after its Benchmark Duration (Active), wait, stop Server, then generate the report.
+
+**Idle** (Server phase):
+The Benchmark Run phase, measured during the pre-Client wait, where Server resource usage is sampled with no Client load applied. Used as the baseline in the report.
+
+**Active** (Benchmark Run phase):
+The Benchmark Run phase, spanning the Client Simulator's actual process lifetime (started, sampled until it exits after its Benchmark Duration elapses and self-terminates), where both Server and Client resource usage are sampled under load. Bounded by the Client's own Benchmark Duration setting rather than an independent Harness timer, so the two can't drift out of sync.
+_Avoid_: ACTIVE (as a bare stats variable with no defined sampling window — the earlier draft left this uncomputed)
+
+**Resource Profile**:
+The CPU/RAM limit applied independently to the Server process and the Client process for a Benchmark Run (default: 2 cores / 4GB each), enforced as a hard cap by running each process in its own Docker container (ADR-0008) rather than a JVM-level hint. A configuration setting in the Benchmark Harness script, not a CLI flag — changing it means editing the script's config values.
+
+**Load Profile**:
+The simulated Client count (default 10,000), Register rate (default 1,000/s), and Benchmark Duration (default 60s) configured for a Benchmark Run and passed through to the Client Simulator's CLI flags. Unlike Resource Profile, exposed as CLI flags on the Benchmark Harness itself so it can be varied per run without editing the script. Other Client-side settings (Renewal Window, timeouts, retries, host/port) stay at their Client-side defaults and aren't part of the Load Profile.
+
+**Benchmark Report**:
+The output of a Benchmark Run: CPU and RAM usage charts (saved as image files) for the Server across its Idle and Active phases, and for the Client across its Active phase.

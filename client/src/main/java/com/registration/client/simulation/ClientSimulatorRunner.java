@@ -18,10 +18,11 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * Launches Normal Mode (one Simulated Client, runs until killed) or Benchmark Mode
- * (N Simulated Clients, rate-limited REGISTER ramp-up, periodic stats reporting) —
- * see CONTEXT.md's "Client Simulator" terms. A shutdown hook interrupts every
- * Simulated Client on Ctrl+C so each gets the chance to send its voluntary CANCEL
- * (ADR-0004) before the process exits.
+ * (N Simulated Clients, rate-limited REGISTER ramp-up, periodic stats reporting for
+ * a configured Benchmark Duration) — see CONTEXT.md's "Client Simulator" terms.
+ * Benchmark Mode self-terminates once its Benchmark Duration elapses; Normal Mode and
+ * an early Ctrl+C both go through the same shutdown hook. Either way, every Simulated
+ * Client gets the chance to send its voluntary CANCEL (ADR-0004) before the process exits.
  */
 @Component
 public class ClientSimulatorRunner implements ApplicationRunner {
@@ -44,12 +45,15 @@ public class ClientSimulatorRunner implements ApplicationRunner {
         Stats stats = new Stats();
         List<Thread> threads = new ArrayList<>(clientCount);
 
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> shutdown(threads, stats, benchmarkMode), "shutdown"));
+        Thread shutdownHook = new Thread(() -> shutdown(threads, stats, benchmarkMode), "shutdown");
+        Runtime.getRuntime().addShutdownHook(shutdownHook);
 
         launchSimulatedClients(clientCount, stats, threads);
 
         if (benchmarkMode) {
-            reportPeriodicallyForever(stats);
+            reportPeriodicallyForDuration(stats, Duration.ofSeconds(properties.benchmarkDurationSeconds()));
+            Runtime.getRuntime().removeShutdownHook(shutdownHook);
+            shutdown(threads, stats, true);
         } else {
             threads.get(0).join();
         }
@@ -81,9 +85,12 @@ public class ClientSimulatorRunner implements ApplicationRunner {
         log.info("Launched {} Simulated Client(s) in {} mode", clientCount, properties.mode());
     }
 
-    private void reportPeriodicallyForever(Stats stats) throws InterruptedException {
-        while (true) {
-            Thread.sleep(REPORT_INTERVAL.toMillis());
+    private void reportPeriodicallyForDuration(Stats stats, Duration duration) throws InterruptedException {
+        long remainingMillis = duration.toMillis();
+        while (remainingMillis > 0) {
+            long sleepMillis = Math.min(REPORT_INTERVAL.toMillis(), remainingMillis);
+            Thread.sleep(sleepMillis);
+            remainingMillis -= sleepMillis;
             log.info("\n{}", stats.report());
         }
     }

@@ -1,0 +1,11 @@
+# Docker-enforced Resource Profile for the Benchmark Harness
+
+The Benchmark Harness needs to run the Server and Client under a genuine, reproducible CPU/RAM cap (the Resource Profile) so Benchmark Reports mean something across machines. JVM flags alone don't get us there: `-Xmx` really does cap heap, but `-XX:ActiveProcessorCount` only sizes the JVM's internal thread pools — it's a hint, not an OS-level limit, and the Client's virtual threads aren't bound by it. `taskset`/native cgroups would enforce it for real, but only on Linux; this repo is developed on macOS, where neither exists.
+
+We chose to run the Server and Client each in its own Docker container with `--cpus`/`--memory` limits. Docker's resource flags map to native cgroups on Linux and to Docker Desktop's Linux VM on macOS, giving one enforcement mechanism that behaves the same on both the dev machine and wherever the Harness eventually runs for real numbers — at the cost of requiring Docker to be installed and images to be built for both jars.
+
+This also means resource sampling can no longer read the processes directly via `psutil` on the host (a containerized JVM's real PID isn't visible from the host, especially inside Docker Desktop's VM on macOS). The Harness instead reads `docker stats` for each container, which has the added benefit of reporting memory against the container's actual `--memory` cap rather than just a raw RSS figure.
+
+Containerizing both processes also breaks the Client's `localhost:9000` default, since Server and Client no longer share a network namespace. The Harness puts both containers on a shared user-defined Docker network and points the Client at the Server's container name instead of `localhost`. `--network host` was rejected as the fix because it doesn't exist on Docker Desktop for Mac — it would have silently broken the one platform this ADR exists to support.
+
+Unlike the repo's other Docker usage (`compose.redis.yml`, a long-running service just `up`'d and left running), the Harness drives containers imperatively through the Docker SDK rather than Compose: a Benchmark Run needs precise staggered timing (start Server, wait, start Client with Load-Profile flags computed from that run's CLI args, poll until it exits, stop Server) that Compose's declarative "up the stack" model doesn't fit.
