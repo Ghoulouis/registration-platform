@@ -14,6 +14,7 @@ public final class MessageCodec {
     private static final int CLIENT_ID_PAYLOAD_LENGTH = 8;
     private static final int RESPONSE_PAYLOAD_LENGTH = 3;
     private static final int CANCEL_RESPONSE_PAYLOAD_LENGTH = 1;
+    private static final int STATUS_ONLY_PAYLOAD_LENGTH = 1;
 
     private MessageCodec() {
     }
@@ -31,10 +32,10 @@ public final class MessageCodec {
     /** {@code payload} must be positioned at the start of exactly one payload's worth of bytes. */
     public static ProtocolMessage decode(MessageType type, ByteBuffer payload) {
         return switch (type) {
-            case REGISTER_REQUEST -> new RegisterRequest(readClientId(payload));
+            case REGISTER_REQUEST -> readRegisterRequest(payload);
             case RENEW_REQUEST -> new RenewRequest(readClientId(payload));
             case CANCEL_REQUEST -> new CancelRequest(readClientId(payload));
-            case REGISTER_RESPONSE -> new RegisterResponse(readStatus(payload), readValidityPeriod(payload));
+            case REGISTER_RESPONSE -> readRegisterResponse(payload);
             case RENEW_RESPONSE -> new RenewResponse(readStatus(payload), readValidityPeriod(payload));
             case CANCEL_RESPONSE -> new CancelResponse(readStatus(payload));
         };
@@ -42,12 +43,77 @@ public final class MessageCodec {
 
     private static ByteBuffer encodePayload(ProtocolMessage message) {
         return switch (message) {
-            case RegisterRequest r -> writeClientId(r.clientId());
+            case RegisterRequest r -> writeRegisterRequest(r);
             case RenewRequest r -> writeClientId(r.clientId());
             case CancelRequest r -> writeClientId(r.clientId());
-            case RegisterResponse r -> writeResponse(r.status(), r.validityPeriodSeconds());
+            case RegisterResponse r -> writeRegisterResponse(r);
             case RenewResponse r -> writeResponse(r.status(), r.validityPeriodSeconds());
             case CancelResponse r -> writeStatusOnly(r.status());
+        };
+    }
+
+    private static ByteBuffer writeRegisterRequest(RegisterRequest request) {
+        boolean hasResponse = request.hasChallengeResponse();
+        int length = CLIENT_ID_PAYLOAD_LENGTH + (hasResponse ? ChallengeResponse.LENGTH : 0);
+        ByteBuffer buffer = ByteBuffer.allocate(length);
+        buffer.putLong(request.clientId().rawValue());
+        if (hasResponse) {
+            buffer.put(request.challengeResponse().value());
+        }
+        buffer.flip();
+        return buffer;
+    }
+
+    private static ByteBuffer writeRegisterResponse(RegisterResponse response) {
+        ByteBuffer buffer = switch (response.status()) {
+            case SUCCESS, ALREADY_REGISTERED -> {
+                ByteBuffer b = ByteBuffer.allocate(RESPONSE_PAYLOAD_LENGTH);
+                b.put(response.status().code());
+                b.putShort((short) response.validityPeriodSeconds());
+                yield b;
+            }
+            case CHALLENGE -> {
+                ByteBuffer b = ByteBuffer.allocate(STATUS_ONLY_PAYLOAD_LENGTH + Challenge.LENGTH);
+                b.put(response.status().code());
+                b.put(response.challenge().value());
+                yield b;
+            }
+            case CHALLENGE_REJECTED -> {
+                ByteBuffer b = ByteBuffer.allocate(STATUS_ONLY_PAYLOAD_LENGTH);
+                b.put(response.status().code());
+                yield b;
+            }
+            case NOT_REGISTERED -> throw new IllegalArgumentException("REGISTER_RESPONSE cannot carry NOT_REGISTERED");
+        };
+        buffer.flip();
+        return buffer;
+    }
+
+    private static RegisterRequest readRegisterRequest(ByteBuffer payload) {
+        ClientId clientId = readClientId(payload);
+        if (payload.remaining() == 0) {
+            return RegisterRequest.initial(clientId);
+        }
+        if (payload.remaining() != ChallengeResponse.LENGTH) {
+            throw new IllegalArgumentException(
+                    "Malformed REGISTER_REQUEST payload: " + payload.remaining() + " bytes after Client ID");
+        }
+        byte[] responseBytes = new byte[ChallengeResponse.LENGTH];
+        payload.get(responseBytes);
+        return RegisterRequest.withChallengeResponse(clientId, ChallengeResponse.of(responseBytes));
+    }
+
+    private static RegisterResponse readRegisterResponse(ByteBuffer payload) {
+        StatusCode status = readStatus(payload);
+        return switch (status) {
+            case SUCCESS, ALREADY_REGISTERED -> new RegisterResponse(status, readValidityPeriod(payload), null);
+            case CHALLENGE -> {
+                byte[] challengeBytes = new byte[Challenge.LENGTH];
+                payload.get(challengeBytes);
+                yield RegisterResponse.challenge(Challenge.of(challengeBytes));
+            }
+            case CHALLENGE_REJECTED -> RegisterResponse.challengeRejected();
+            case NOT_REGISTERED -> throw new IllegalArgumentException("REGISTER_RESPONSE cannot carry NOT_REGISTERED");
         };
     }
 

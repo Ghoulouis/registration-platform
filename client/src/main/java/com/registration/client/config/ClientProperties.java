@@ -21,7 +21,9 @@ public record ClientProperties(
         @DefaultValue("2000") long timeoutMillis,
         @DefaultValue("3") int maxRetries,
         @DefaultValue("200") long retryBaseDelayMillis,
-        @DefaultValue("") String authToken) {
+        // Demo Shared Signing Key private half (ADR-0009) - matches the Server's default
+        // authPublicKey. Not for production use; override both to use a real keypair.
+        @DefaultValue("pU55QBNBWdgYnCyCaZsfU3jImcyqZKGmSv3Nb+YEEbM=") String authPrivateKey) {
 
     public ClientProperties {
         if (simulatedClients < 1) {

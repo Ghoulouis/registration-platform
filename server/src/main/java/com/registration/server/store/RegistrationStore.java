@@ -10,6 +10,9 @@ import java.time.Duration;
  */
 public interface RegistrationStore {
 
+    /** True if {@code clientId} has a live (unexpired) Registration. */
+    boolean isRegistered(ClientId clientId);
+
     /** Creates a Registration valid for {@code validityPeriod}. False if one already exists. */
     boolean tryRegister(ClientId clientId, Duration validityPeriod);
 

@@ -23,6 +23,12 @@ public class InMemoryRegistrationStore implements RegistrationStore {
     private final Map<ClientId, Instant> expiryByClientId = new ConcurrentHashMap<>();
 
     @Override
+    public boolean isRegistered(ClientId clientId) {
+        Instant expiresAt = expiryByClientId.get(clientId);
+        return expiresAt != null && expiresAt.isAfter(Instant.now());
+    }
+
+    @Override
     public boolean tryRegister(ClientId clientId, Duration validityPeriod) {
         Instant expiresAt = Instant.now().plus(validityPeriod);
         return expiryByClientId.putIfAbsent(clientId, expiresAt) == null;

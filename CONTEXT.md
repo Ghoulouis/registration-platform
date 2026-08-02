@@ -7,7 +7,7 @@ A Client/Server system simulating registration and active-state maintenance of u
 ### Core
 
 **Client**:
-A process that registers with the Server and periodically sends a Renewal before its Registration's Validity Period lapses. Holds no persistent connection and no server-assigned state — each Register or Renewal is a short-lived connection: connect, send, receive response, disconnect.
+A process that registers with the Server and periodically sends a Renewal before its Registration's Validity Period lapses. Holds no persistent connection and no server-assigned state — each Renewal or Cancellation is one short-lived connection: connect, send, receive response, disconnect. A Register attempt is two such connections in sequence (get a Challenge, then submit a Challenge Response), never one held open across both (ADR-0009).
 _Avoid_: Session
 
 **Client ID**:
@@ -43,6 +43,19 @@ The Server's removal of a Client's Registration after its Validity Period lapses
 **Cancellation**:
 A Client's voluntary request to remove its own Registration before its Validity Period lapses (ADR-0004). Distinct from Expiration: Cancellation is Client-driven and immediate; Expiration is Server-driven and timeout-based.
 _Avoid_: Unregister, Deregister
+
+**Challenge**:
+A random 32-byte nonce the Server generates and holds (in the Challenge Store) when a Client ID with no live Registration sends its initial Register attempt. Expires after 30 seconds and is discarded after any verification attempt, success or failure — never reusable (ADR-0009).
+
+**Challenge Response**:
+The Ed25519 signature over a Challenge, computed by the Client with the Shared Signing Key's private key, submitted back to the Server to complete Registration. Verified against the Shared Signing Key's public key. Distinct from the many `*Response` protocol messages (`RegisterResponse`, etc.) — this is the signature itself, one field within a Register attempt's second request.
+_Avoid_: Response (ambiguous with protocol message names), Signature (use in implementation, not as the glossary term)
+
+**Challenge Store**:
+The Server's in-memory store of issued, not-yet-verified Challenges, keyed by Client ID.
+
+**Shared Signing Key**:
+The single Ed25519 keypair configured for a Client Simulator run: every Simulated Client signs its Challenge with the same private key, and the Server verifies every Challenge Response against the same public key. Not a per-Client credential — this simulates the challenge-response mechanism, not a multi-tenant identity system (ADR-0009).
 
 ### Client Simulator
 

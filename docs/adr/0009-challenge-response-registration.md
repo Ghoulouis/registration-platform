@@ -1,0 +1,13 @@
+# Challenge-response Registration over two short-lived connections, Ed25519, whole-flow retry
+
+Registration now requires proving the Client holds a Shared Signing Key before a Registration is created, without ever transmitting that key: the Server issues a Challenge, the Client signs it, the Server verifies the signature.
+
+We chose **two separate short-lived connections** (get Challenge, then submit Challenge Response) over holding one connection open across both. Both `TcpClient` (client) and `TcpServer`'s NIO reactor (server) are hard-built around "connect, one frame in, one frame out, close" — a persistent multi-round-trip connection would have required reworking both. A Server-side Challenge Store (keyed by Client ID) is needed either way, since verification has to check the Response against something the Server issued, so the two-connection model buys architectural consistency at the cost of one extra TCP handshake per Register attempt.
+
+We chose **Ed25519** over an HMAC shared-secret: it's asymmetric, so the signing key never has to exist on the Server at all (only the public key does), it's built into the JDK (`java.security.Signature`, no new dependency), and it fits the existing fixed-layout binary format (ADR-0003) the same way `ClientId`'s 8-byte long does — a 32-byte Challenge, a 64-byte signature. There's one **Shared Signing Key** for an entire Client Simulator run, not a per-Client credential: this simulates the mechanism, it isn't a multi-tenant identity system, so there's no credential-provisioning problem to solve.
+
+A Challenge expires after **30 seconds** and is discarded after **any** verification attempt — success or failure — closing off repeated guessing against one fixed Challenge.
+
+Retries always **restart the whole Step 1→4 exchange with a fresh Challenge**, never resume a Challenge from a failed prior attempt — the Client can't distinguish "my Challenge expired" from "my Challenge was already consumed by a response that got lost on the way back" from its side of a dropped connection. This composes for free with the existing rule that a retried REGISTER returning `ALREADY_REGISTERED` is treated as our own earlier attempt succeeding (ADR-0005): if the Server already completed a prior attempt, a fresh Step 1 naturally reports that.
+
+The wire format stays within `REGISTER_REQUEST`/`REGISTER_RESPONSE` rather than adding new `MessageType`s — payload shape already varies by content in this codebase (`CancelResponse` is shorter than `RegisterResponse`), so a `REGISTER_REQUEST` with an appended 64-byte signature, and a `REGISTER_RESPONSE` whose payload shape depends on a new `CHALLENGE` / `CHALLENGE_REJECTED` status, is consistent with the existing convention rather than a new one.

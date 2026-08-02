@@ -13,7 +13,7 @@ class FrameDecoderTest {
 
     @Test
     void decodesFrameDeliveredInOneChunk() {
-        ProtocolMessage original = new RegisterRequest(ClientId.parse("123456789012"));
+        ProtocolMessage original = RegisterRequest.initial(ClientId.parse("123456789012"));
         ByteBuffer frame = MessageCodec.encode(original);
 
         FrameDecoder decoder = new FrameDecoder();

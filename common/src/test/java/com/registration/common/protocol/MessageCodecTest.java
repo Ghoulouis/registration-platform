@@ -9,8 +9,16 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 class MessageCodecTest {
 
     @Test
-    void roundTripsRegisterRequest() {
-        RegisterRequest original = new RegisterRequest(ClientId.parse("123456789012"));
+    void roundTripsInitialRegisterRequest() {
+        RegisterRequest original = RegisterRequest.initial(ClientId.parse("123456789012"));
+
+        assertEquals(original, decode(encode(original)));
+    }
+
+    @Test
+    void roundTripsRegisterRequestWithChallengeResponse() {
+        ChallengeResponse response = ChallengeResponse.of(new byte[ChallengeResponse.LENGTH]);
+        RegisterRequest original = RegisterRequest.withChallengeResponse(ClientId.parse("123456789012"), response);
 
         assertEquals(original, decode(encode(original)));
     }
@@ -24,14 +32,28 @@ class MessageCodecTest {
 
     @Test
     void roundTripsRegisterResponseSuccess() {
-        RegisterResponse original = new RegisterResponse(StatusCode.SUCCESS, 300);
+        RegisterResponse original = RegisterResponse.success(300);
 
         assertEquals(original, decode(encode(original)));
     }
 
     @Test
-    void roundTripsRegisterResponseError() {
-        RegisterResponse original = new RegisterResponse(StatusCode.ALREADY_REGISTERED, 0);
+    void roundTripsRegisterResponseAlreadyRegistered() {
+        RegisterResponse original = RegisterResponse.alreadyRegistered();
+
+        assertEquals(original, decode(encode(original)));
+    }
+
+    @Test
+    void roundTripsRegisterResponseChallenge() {
+        RegisterResponse original = RegisterResponse.challenge(Challenge.random());
+
+        assertEquals(original, decode(encode(original)));
+    }
+
+    @Test
+    void roundTripsRegisterResponseChallengeRejected() {
+        RegisterResponse original = RegisterResponse.challengeRejected();
 
         assertEquals(original, decode(encode(original)));
     }
@@ -66,7 +88,7 @@ class MessageCodecTest {
 
     @Test
     void wireLayoutMatchesHeaderPlusPayload() {
-        RegisterRequest message = new RegisterRequest(ClientId.ofRawValue(42L));
+        RegisterRequest message = RegisterRequest.initial(ClientId.ofRawValue(42L));
 
         ByteBuffer frame = MessageCodec.encode(message);
 

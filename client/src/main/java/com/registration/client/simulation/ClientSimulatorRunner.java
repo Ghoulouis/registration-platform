@@ -4,6 +4,7 @@ import com.registration.client.config.ClientProperties;
 import com.registration.client.net.TcpClient;
 import com.registration.client.retry.RetryingRequester;
 import com.registration.client.stats.Stats;
+import com.registration.common.crypto.Ed25519;
 import com.registration.common.protocol.ClientId;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -11,6 +12,7 @@ import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.stereotype.Component;
 
+import java.security.PrivateKey;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -64,6 +66,7 @@ public class ClientSimulatorRunner implements ApplicationRunner {
         Duration timeout = Duration.ofMillis(properties.timeoutMillis());
         Duration retryBaseDelay = Duration.ofMillis(properties.retryBaseDelayMillis());
         long intervalNanos = (long) (1_000_000_000.0 / properties.registerRatePerSecond());
+        PrivateKey signingKey = Ed25519.parsePrivateKey(properties.authPrivateKey());
 
         for (int i = 0; i < clientCount; i++) {
             TcpClient tcpClient = new TcpClient(properties.serverHost(), properties.serverPort(), timeout);
@@ -72,6 +75,7 @@ public class ClientSimulatorRunner implements ApplicationRunner {
             SimulatedClient client = new SimulatedClient(
                     ClientId.random(),
                     requester,
+                    signingKey,
                     properties.assumedValidityPeriodSeconds(),
                     properties.renewalWindowMinPercent(),
                     properties.renewalWindowMaxPercent());

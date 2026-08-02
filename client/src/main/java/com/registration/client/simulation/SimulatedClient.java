@@ -6,7 +6,6 @@ import com.registration.client.stats.OperationType;
 import com.registration.common.protocol.CancelRequest;
 import com.registration.common.protocol.CancelResponse;
 import com.registration.common.protocol.ClientId;
-import com.registration.common.protocol.RegisterRequest;
 import com.registration.common.protocol.RegisterResponse;
 import com.registration.common.protocol.RenewRequest;
 import com.registration.common.protocol.RenewResponse;
@@ -14,6 +13,7 @@ import com.registration.common.protocol.StatusCode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.security.PrivateKey;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
@@ -28,6 +28,7 @@ public final class SimulatedClient implements Runnable {
 
     private final ClientId clientId;
     private final RetryingRequester requester;
+    private final PrivateKey signingKey;
     private final int assumedValidityPeriodSeconds;
     private final int renewalWindowMinPercent;
     private final int renewalWindowMaxPercent;
@@ -35,11 +36,13 @@ public final class SimulatedClient implements Runnable {
     public SimulatedClient(
             ClientId clientId,
             RetryingRequester requester,
+            PrivateKey signingKey,
             int assumedValidityPeriodSeconds,
             int renewalWindowMinPercent,
             int renewalWindowMaxPercent) {
         this.clientId = clientId;
         this.requester = requester;
+        this.signingKey = signingKey;
         this.assumedValidityPeriodSeconds = assumedValidityPeriodSeconds;
         this.renewalWindowMinPercent = renewalWindowMinPercent;
         this.renewalWindowMaxPercent = renewalWindowMaxPercent;
@@ -73,19 +76,23 @@ public final class SimulatedClient implements Runnable {
     }
 
     private int register() throws InterruptedException {
-        RegisterResponse response =
-                (RegisterResponse) requester.send(OperationType.REGISTER, new RegisterRequest(clientId));
+        RegisterResponse response = requester.register(clientId, signingKey);
         if (response.status() == StatusCode.SUCCESS) {
             log.debug("[{}] REGISTER succeeded, validity period {}s", clientId, response.validityPeriodSeconds());
             return response.validityPeriodSeconds();
         }
-        // ALREADY_REGISTERED: almost certainly our own earlier attempt landing (ADR-0005) —
-        // Client IDs are independently random, so we proceed as registered. The Server doesn't
-        // return a real period on this status, so fall back to our own assumed value, same as
-        // we would before any authoritative response (grilled Question 5).
-        log.info("[{}] REGISTER returned ALREADY_REGISTERED, proceeding as registered "
-                + "with assumed validity period {}s", clientId, assumedValidityPeriodSeconds);
-        return assumedValidityPeriodSeconds;
+        if (response.status() == StatusCode.ALREADY_REGISTERED) {
+            // Almost certainly our own earlier attempt landing (ADR-0005) — Client IDs are
+            // independently random, so we proceed as registered. The Server doesn't return a
+            // real period on this status, so fall back to our own assumed value, same as we
+            // would before any authoritative response (grilled Question 5).
+            log.info("[{}] REGISTER returned ALREADY_REGISTERED, proceeding as registered "
+                    + "with assumed validity period {}s", clientId, assumedValidityPeriodSeconds);
+            return assumedValidityPeriodSeconds;
+        }
+        // CHALLENGE_REJECTED: genuinely failed to authenticate (expired or already-consumed
+        // Challenge) — unlike ALREADY_REGISTERED, this isn't our own earlier attempt landing.
+        throw new CallFailedException("REGISTER challenge rejected");
     }
 
     private int renew() throws InterruptedException {
