@@ -163,8 +163,9 @@ public class TcpServer implements SmartLifecycle {
 
     /**
      * Puts the request's Trace Context (ADR-0012) into MDC for the duration of handling it,
-     * so any log line produced while working on this request — now or later — carries the
-     * same traceId/spanId a Client-side log for the same attempt would.
+     * so any log line produced while working on this request — including every step of the
+     * Registration Event Log {@link RegistrationService} emits internally (ADR-0014) — carries
+     * the same traceId/spanId a Client-side log for the same attempt would.
      */
     private ProtocolMessage handleWithTraceContext(ProtocolMessage request) {
         TraceContext trace = traceContextOf(request);

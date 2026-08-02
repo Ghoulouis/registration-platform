@@ -58,7 +58,7 @@ public final class SimulatedClient implements Runnable {
         try {
             validityPeriodSeconds = register();
         } catch (CallFailedException e) {
-            log.debug("[{}] REGISTER failed, giving up: {}", clientId, e.getMessage());
+            log.debug("[{}] REGISTER failed -> REJECTED: {}", clientId, e.getMessage());
             return;
         } catch (InterruptedException e) {
             return; // shut down before ever registering; nothing to cancel
@@ -72,7 +72,7 @@ public final class SimulatedClient implements Runnable {
         } catch (InterruptedException e) {
             // shutdown signal: fall through to voluntary Cancellation
         } catch (RenewalFailedException e) {
-            log.debug("[{}] RENEW failed, giving up: {}", clientId, e.getMessage());
+            log.debug("[{}] RENEW failed -> REJECTED: {}", clientId, e.getMessage());
             return; // not confident we're still registered; don't attempt to cancel
         }
 
@@ -83,7 +83,7 @@ public final class SimulatedClient implements Runnable {
         RegisterResponse response = requester.register(clientId, signingKey);
         if (response.status() == StatusCode.SUCCESS) {
             currentNonce = response.nonce();
-            log.debug("[{}] REGISTER succeeded, validity period {}s", clientId, response.validityPeriodSeconds());
+            log.debug("[{}] REGISTER success -> SUCCESS (validity period {}s)", clientId, response.validityPeriodSeconds());
             return response.validityPeriodSeconds();
         }
         if (response.status() == StatusCode.ALREADY_REGISTERED) {
@@ -93,8 +93,8 @@ public final class SimulatedClient implements Runnable {
             // would before any authoritative response (grilled Question 5). It does return the
             // current Nonce though (ADR-0010) — without that we'd have no way to ever Renew.
             currentNonce = response.nonce();
-            log.info("[{}] REGISTER returned ALREADY_REGISTERED, proceeding as registered "
-                    + "with assumed validity period {}s", clientId, assumedValidityPeriodSeconds);
+            log.info("[{}] REGISTER already_registered -> REJECTED (proceeding as registered, "
+                    + "assumed validity period {}s)", clientId, assumedValidityPeriodSeconds);
             return assumedValidityPeriodSeconds;
         }
         // CHALLENGE_REJECTED: genuinely failed to authenticate (expired or already-consumed
@@ -114,7 +114,7 @@ public final class SimulatedClient implements Runnable {
             throw new RenewalFailedException("Server returned " + response.status());
         }
         currentNonce = response.nonce();
-        log.debug("[{}] RENEW succeeded, validity period {}s", clientId, response.validityPeriodSeconds());
+        log.debug("[{}] RENEW success -> SUCCESS (validity period {}s)", clientId, response.validityPeriodSeconds());
         return response.validityPeriodSeconds();
     }
 
@@ -122,9 +122,10 @@ public final class SimulatedClient implements Runnable {
         try {
             NonceSignature signature = Ed25519.sign(signingKey, currentNonce);
             CancelResponse response = requester.cancel(clientId, signature);
-            log.info("[{}] CANCEL returned {}", clientId, response.status());
+            String result = response.status() == StatusCode.SUCCESS ? "SUCCESS" : "REJECTED";
+            log.info("[{}] CANCEL {} -> {}", clientId, response.status().name().toLowerCase(), result);
         } catch (CallFailedException e) {
-            log.debug("[{}] CANCEL failed (best-effort during shutdown): {}", clientId, e.getMessage());
+            log.debug("[{}] CANCEL failed -> REJECTED (best-effort during shutdown): {}", clientId, e.getMessage());
         } catch (InterruptedException e) {
             // already shutting down; nothing more to do
         }

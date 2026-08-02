@@ -15,11 +15,15 @@ import com.registration.common.protocol.RenewRequest;
 import com.registration.common.protocol.RenewResponse;
 import com.registration.common.protocol.StatusCode;
 import com.registration.common.protocol.TraceContext;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 import java.io.IOException;
 import java.net.SocketTimeoutException;
 import java.security.PrivateKey;
 import java.time.Duration;
+import java.util.HexFormat;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
@@ -30,6 +34,8 @@ import java.util.concurrent.ThreadLocalRandom;
  * every retry (and, for Register, for each of its two legs).
  */
 public final class RetryingRequester {
+
+    private static final Logger log = LoggerFactory.getLogger(RetryingRequester.class);
 
     private final TcpClient tcpClient;
     private final int maxRetries;
@@ -80,6 +86,7 @@ public final class RetryingRequester {
 
     private RegisterResponse attemptRegister(ClientId clientId, PrivateKey signingKey, TraceContext trace)
             throws IOException {
+        log.debug("[{}] REGISTER requesting_nonce", clientId);
         RegisterResponse initial = (RegisterResponse) tcpClient.send(RegisterRequest.initial(clientId, trace));
         if (initial.status() != StatusCode.CHALLENGE) {
             return initial; // ALREADY_REGISTERED: nothing to sign, no second leg
@@ -87,6 +94,8 @@ public final class RetryingRequester {
         NonceSignature signature = Ed25519.sign(signingKey, initial.nonce());
         // Step 2 is a separate connection attempt - its own Span ID, same Trace (ADR-0012).
         TraceContext confirmSpan = trace.newSpan();
+        putTraceContext(confirmSpan);
+        log.debug("[{}] REGISTER submitting_auth_data", clientId);
         return (RegisterResponse) tcpClient.send(RegisterRequest.withNonceSignature(clientId, confirmSpan, signature));
     }
 
@@ -105,6 +114,7 @@ public final class RetryingRequester {
             operationStats.recordAttempt(isRetry);
 
             long startNanos = System.nanoTime();
+            putTraceContext(trace);
             try {
                 T response = attempt.run(trace);
                 operationStats.recordResponseTime((System.nanoTime() - startNanos) / 1_000_000);
@@ -121,10 +131,26 @@ public final class RetryingRequester {
                     operationStats.recordOutcome(false);
                     throw new CallFailedException("Connection error after " + attemptNumber + " attempts", e);
                 }
+            } finally {
+                clearTraceContext();
             }
 
             Thread.sleep(backoffWithJitterMillis(attemptNumber));
         }
+    }
+
+    /** Mirrors the Server's TcpServer MDC wiring (ADR-0012), so Client-side step logs (this class
+     * only — SimulatedClient's own logs happen after this call returns, MDC already cleared)
+     * carry the same traceId/spanId the Server logs for the matching connection attempt. */
+    private static void putTraceContext(TraceContext trace) {
+        HexFormat hex = HexFormat.of();
+        MDC.put("traceId", hex.formatHex(trace.traceId()));
+        MDC.put("spanId", hex.formatHex(trace.spanId()));
+    }
+
+    private static void clearTraceContext() {
+        MDC.remove("traceId");
+        MDC.remove("spanId");
     }
 
     private static boolean isRegisterSuccess(RegisterResponse response, boolean isRetry) {

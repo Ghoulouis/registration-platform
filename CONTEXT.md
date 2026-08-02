@@ -64,6 +64,9 @@ A 16-byte identifier for one logical Register, Renewal, or Cancellation attempt 
 An 8-byte identifier for one specific connection attempt within a Trace (ADR-0012). The Client generates a fresh Span ID for every attempt — each retry, each Register leg — while the Trace ID stays constant. The Server logs using the Span ID it received rather than minting its own child span; there's no further downstream hop in this system to justify one.
 _Avoid_: Correlation ID (the generic term; this project uses the W3C Trace Context vocabulary specifically, for interop with standard observability tooling)
 
+**Registration Event Log**:
+Structured log lines for the REGISTER/RENEW/CANCEL flow, on both Client and Server, each carrying Client ID, transaction (REGISTER/RENEW/CANCEL), and event type (ADR-0013, ADR-0014). Two shapes: a **step** (an intermediate, informational event — a Nonce was issued, auth data was received, a signature verified — always DEBUG, no result) and an **outcome** (a completed transaction — result is `SUCCESS` or `REJECTED`, severity is the log level, not a third result value). Logged inline inside `RegistrationService` at each decision point, not classified after the fact — that's the only place step-level granularity is visible. Written to console only for now; not yet shipped anywhere queryable.
+
 ### Client Simulator
 
 **Simulated Client**:
