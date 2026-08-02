@@ -9,9 +9,9 @@ import com.registration.common.crypto.Ed25519;
 import com.registration.common.protocol.CancelResponse;
 import com.registration.common.protocol.Challenge;
 import com.registration.common.protocol.ClientId;
+import com.registration.common.protocol.Nonce;
 import com.registration.common.protocol.RegisterResponse;
 import com.registration.common.protocol.RenewResponse;
-import com.registration.common.protocol.StatusCode;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -50,9 +50,9 @@ class SimulatedClientTest {
         // the renewed period of 10s then pushes the *next* renewal ~9-9.9s out, well past
         // this test's interrupt, so exactly one deterministic RENEW happens.
         server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.challenge(Challenge.random())));
-        server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.success(0)));
-        server.enqueue(ScriptedTcpServer.Behavior.respond(new RenewResponse(StatusCode.SUCCESS, 10)));
-        server.enqueue(ScriptedTcpServer.Behavior.respond(new CancelResponse(StatusCode.SUCCESS)));
+        server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.success(0, Nonce.random())));
+        server.enqueue(ScriptedTcpServer.Behavior.respond(RenewResponse.success(10, Nonce.random())));
+        server.enqueue(ScriptedTcpServer.Behavior.respond(CancelResponse.success()));
 
         SimulatedClient client = newClient(0, 90, 99);
         Thread thread = Thread.ofVirtual().start(client);
@@ -70,8 +70,8 @@ class SimulatedClientTest {
     @Test
     void cancelsOnInterruptWhileWaitingForRenewalWindow() throws InterruptedException {
         server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.challenge(Challenge.random())));
-        server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.success(10)));
-        server.enqueue(ScriptedTcpServer.Behavior.respond(new CancelResponse(StatusCode.SUCCESS)));
+        server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.success(10, Nonce.random())));
+        server.enqueue(ScriptedTcpServer.Behavior.respond(CancelResponse.success()));
 
         SimulatedClient client = newClient(10, 90, 99);
         Thread thread = Thread.ofVirtual().start(client);
@@ -88,8 +88,8 @@ class SimulatedClientTest {
     @Test
     void stopsWithoutCancelWhenRenewIsRejected() throws InterruptedException {
         server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.challenge(Challenge.random())));
-        server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.success(0)));
-        server.enqueue(ScriptedTcpServer.Behavior.respond(new RenewResponse(StatusCode.NOT_REGISTERED, 0)));
+        server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.success(0, Nonce.random())));
+        server.enqueue(ScriptedTcpServer.Behavior.respond(RenewResponse.notRegistered()));
 
         SimulatedClient client = newClient(0, 90, 99);
         Thread thread = Thread.ofVirtual().start(client);

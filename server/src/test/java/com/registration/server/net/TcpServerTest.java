@@ -3,10 +3,11 @@ package com.registration.server.net;
 import com.registration.common.crypto.Ed25519;
 import com.registration.common.protocol.CancelRequest;
 import com.registration.common.protocol.CancelResponse;
-import com.registration.common.protocol.ChallengeResponse;
 import com.registration.common.protocol.ClientId;
 import com.registration.common.protocol.FrameDecoder;
 import com.registration.common.protocol.MessageCodec;
+import com.registration.common.protocol.Nonce;
+import com.registration.common.protocol.NonceSignature;
 import com.registration.common.protocol.ProtocolMessage;
 import com.registration.common.protocol.RegisterRequest;
 import com.registration.common.protocol.RegisterResponse;
@@ -61,10 +62,13 @@ class TcpServerTest {
     @Test
     void registerThenRenewSucceeds() throws IOException {
         ClientId clientId = ClientId.parse("123456789012");
+        Nonce nonce = register(clientId).nonce();
 
-        assertThat(register(clientId)).isEqualTo(RegisterResponse.success(VALIDITY_PERIOD_SECONDS));
-        assertThat(send(new RenewRequest(clientId)))
-                .isEqualTo(new RenewResponse(StatusCode.SUCCESS, VALIDITY_PERIOD_SECONDS));
+        RenewResponse response = renew(clientId, nonce);
+
+        assertThat(response.status()).isEqualTo(StatusCode.SUCCESS);
+        assertThat(response.validityPeriodSeconds()).isEqualTo(VALIDITY_PERIOD_SECONDS);
+        assertThat(response.nonce()).isNotEqualTo(nonce);
     }
 
     @Test
@@ -72,37 +76,48 @@ class TcpServerTest {
         ClientId clientId = ClientId.parse("111111111111");
         register(clientId);
 
-        assertThat(send(RegisterRequest.initial(clientId))).isEqualTo(RegisterResponse.alreadyRegistered());
+        RegisterResponse response = (RegisterResponse) send(RegisterRequest.initial(clientId));
+
+        assertThat(response.status()).isEqualTo(StatusCode.ALREADY_REGISTERED);
     }
 
     @Test
     void renewWithoutRegisterIsRejected() throws IOException {
         ClientId clientId = ClientId.parse("222222222222");
 
-        assertThat(send(new RenewRequest(clientId)))
-                .isEqualTo(new RenewResponse(StatusCode.NOT_REGISTERED, 0));
+        assertThat(renew(clientId, Nonce.random())).isEqualTo(RenewResponse.notRegistered());
     }
 
     @Test
     void cancelRegisteredClientSucceedsAndFreesTheId() throws IOException {
         ClientId clientId = ClientId.parse("333333333333");
-        register(clientId);
+        Nonce nonce = register(clientId).nonce();
 
-        assertThat(send(new CancelRequest(clientId))).isEqualTo(new CancelResponse(StatusCode.SUCCESS));
-        assertThat(register(clientId)).isEqualTo(RegisterResponse.success(VALIDITY_PERIOD_SECONDS));
+        assertThat(cancel(clientId, nonce)).isEqualTo(CancelResponse.success());
+        assertThat(register(clientId).status()).isEqualTo(StatusCode.SUCCESS);
     }
 
     @Test
     void cancelWithoutRegisterIsRejected() throws IOException {
         ClientId clientId = ClientId.parse("444444444444");
 
-        assertThat(send(new CancelRequest(clientId))).isEqualTo(new CancelResponse(StatusCode.NOT_REGISTERED));
+        assertThat(cancel(clientId, Nonce.random())).isEqualTo(CancelResponse.notRegistered());
     }
 
     private RegisterResponse register(ClientId clientId) throws IOException {
         RegisterResponse challengeResponse = (RegisterResponse) send(RegisterRequest.initial(clientId));
-        ChallengeResponse signature = Ed25519.sign(signingKey, challengeResponse.challenge());
+        var signature = Ed25519.sign(signingKey, challengeResponse.challenge());
         return (RegisterResponse) send(RegisterRequest.withChallengeResponse(clientId, signature));
+    }
+
+    private RenewResponse renew(ClientId clientId, Nonce nonceToSign) throws IOException {
+        NonceSignature signature = Ed25519.sign(signingKey, nonceToSign);
+        return (RenewResponse) send(new RenewRequest(clientId, signature));
+    }
+
+    private CancelResponse cancel(ClientId clientId, Nonce nonceToSign) throws IOException {
+        NonceSignature signature = Ed25519.sign(signingKey, nonceToSign);
+        return (CancelResponse) send(new CancelRequest(clientId, signature));
     }
 
     private ProtocolMessage send(ProtocolMessage request) throws IOException {

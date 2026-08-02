@@ -24,22 +24,15 @@ class MessageCodecTest {
     }
 
     @Test
-    void roundTripsRenewRequest() {
-        RenewRequest original = new RenewRequest(ClientId.parse("123456789012"));
-
-        assertEquals(original, decode(encode(original)));
-    }
-
-    @Test
     void roundTripsRegisterResponseSuccess() {
-        RegisterResponse original = RegisterResponse.success(300);
+        RegisterResponse original = RegisterResponse.success(300, Nonce.random());
 
         assertEquals(original, decode(encode(original)));
     }
 
     @Test
     void roundTripsRegisterResponseAlreadyRegistered() {
-        RegisterResponse original = RegisterResponse.alreadyRegistered();
+        RegisterResponse original = RegisterResponse.alreadyRegistered(Nonce.random());
 
         assertEquals(original, decode(encode(original)));
     }
@@ -59,29 +52,59 @@ class MessageCodecTest {
     }
 
     @Test
-    void roundTripsRenewResponse() {
-        RenewResponse original = new RenewResponse(StatusCode.NOT_REGISTERED, 0);
+    void roundTripsRenewRequest() {
+        NonceSignature signature = NonceSignature.of(new byte[NonceSignature.LENGTH]);
+        RenewRequest original = new RenewRequest(ClientId.parse("123456789012"), signature);
+
+        assertEquals(original, decode(encode(original)));
+    }
+
+    @Test
+    void roundTripsRenewResponseSuccess() {
+        RenewResponse original = RenewResponse.success(60, Nonce.random());
+
+        assertEquals(original, decode(encode(original)));
+    }
+
+    @Test
+    void roundTripsRenewResponseNotRegistered() {
+        RenewResponse original = RenewResponse.notRegistered();
+
+        assertEquals(original, decode(encode(original)));
+    }
+
+    @Test
+    void roundTripsRenewResponseInvalidToken() {
+        RenewResponse original = RenewResponse.invalidToken(Nonce.random());
 
         assertEquals(original, decode(encode(original)));
     }
 
     @Test
     void roundTripsCancelRequest() {
-        CancelRequest original = new CancelRequest(ClientId.parse("123456789012"));
+        NonceSignature signature = NonceSignature.of(new byte[NonceSignature.LENGTH]);
+        CancelRequest original = new CancelRequest(ClientId.parse("123456789012"), signature);
 
         assertEquals(original, decode(encode(original)));
     }
 
     @Test
     void roundTripsCancelResponseSuccess() {
-        CancelResponse original = new CancelResponse(StatusCode.SUCCESS);
+        CancelResponse original = CancelResponse.success();
 
         assertEquals(original, decode(encode(original)));
     }
 
     @Test
     void roundTripsCancelResponseNotRegistered() {
-        CancelResponse original = new CancelResponse(StatusCode.NOT_REGISTERED);
+        CancelResponse original = CancelResponse.notRegistered();
+
+        assertEquals(original, decode(encode(original)));
+    }
+
+    @Test
+    void roundTripsCancelResponseInvalidToken() {
+        CancelResponse original = CancelResponse.invalidToken(Nonce.random());
 
         assertEquals(original, decode(encode(original)));
     }

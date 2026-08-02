@@ -25,7 +25,7 @@ class FrameDecoderTest {
 
     @Test
     void decodesFrameDeliveredOneByteAtATime() {
-        ProtocolMessage original = new RenewResponse(StatusCode.SUCCESS, 120);
+        ProtocolMessage original = RenewResponse.success(120, Nonce.random());
         ByteBuffer frame = MessageCodec.encode(original);
 
         FrameDecoder decoder = new FrameDecoder();

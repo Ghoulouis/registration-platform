@@ -6,6 +6,8 @@ import com.registration.common.protocol.CancelResponse;
 import com.registration.common.protocol.Challenge;
 import com.registration.common.protocol.ChallengeResponse;
 import com.registration.common.protocol.ClientId;
+import com.registration.common.protocol.Nonce;
+import com.registration.common.protocol.NonceSignature;
 import com.registration.common.protocol.RegisterRequest;
 import com.registration.common.protocol.RegisterResponse;
 import com.registration.common.protocol.RenewRequest;
@@ -44,7 +46,11 @@ class RegistrationServiceTest {
     void registerNewClientSucceeds() {
         ClientId clientId = ClientId.parse("123456789012");
 
-        assertThat(register(clientId)).isEqualTo(RegisterResponse.success(VALIDITY_PERIOD_SECONDS));
+        RegisterResponse response = register(clientId);
+
+        assertThat(response.status()).isEqualTo(StatusCode.SUCCESS);
+        assertThat(response.validityPeriodSeconds()).isEqualTo(VALIDITY_PERIOD_SECONDS);
+        assertThat(response.nonce()).isNotNull();
     }
 
     @Test
@@ -83,55 +89,112 @@ class RegistrationServiceTest {
     @Test
     void registerTwiceIsRejected() {
         ClientId clientId = ClientId.parse("123456789012");
-        register(clientId);
+        RegisterResponse first = register(clientId);
 
-        assertThat(service.handle(RegisterRequest.initial(clientId))).isEqualTo(RegisterResponse.alreadyRegistered());
+        RegisterResponse second = (RegisterResponse) service.handle(RegisterRequest.initial(clientId));
+
+        assertThat(second.status()).isEqualTo(StatusCode.ALREADY_REGISTERED);
+        assertThat(second.nonce()).isEqualTo(first.nonce());
     }
 
     @Test
     void renewRegisteredClientSucceeds() {
         ClientId clientId = ClientId.parse("123456789012");
-        register(clientId);
+        Nonce nonce = register(clientId).nonce();
 
-        assertThat(service.handle(new RenewRequest(clientId)))
-                .isEqualTo(new RenewResponse(StatusCode.SUCCESS, VALIDITY_PERIOD_SECONDS));
+        RenewResponse response = renew(clientId, nonce);
+
+        assertThat(response.status()).isEqualTo(StatusCode.SUCCESS);
+        assertThat(response.validityPeriodSeconds()).isEqualTo(VALIDITY_PERIOD_SECONDS);
+        assertThat(response.nonce()).isNotEqualTo(nonce);
     }
 
     @Test
     void renewUnregisteredClientIsRejected() {
         ClientId clientId = ClientId.parse("123456789012");
 
-        assertThat(service.handle(new RenewRequest(clientId)))
-                .isEqualTo(new RenewResponse(StatusCode.NOT_REGISTERED, 0));
+        assertThat(renew(clientId, Nonce.random())).isEqualTo(RenewResponse.notRegistered());
+    }
+
+    @Test
+    void renewWithWrongNonceReturnsInvalidToken() {
+        ClientId clientId = ClientId.parse("123456789012");
+        Nonce nonce = register(clientId).nonce();
+
+        RenewResponse response = renew(clientId, Nonce.random());
+
+        assertThat(response.status()).isEqualTo(StatusCode.INVALID_TOKEN);
+        assertThat(response.nonce()).isEqualTo(nonce);
+    }
+
+    @Test
+    void renewWithThePreviousNonceIsToleratedAsARetryAndDoesNotRotateAgain() {
+        ClientId clientId = ClientId.parse("123456789012");
+        Nonce initialNonce = register(clientId).nonce();
+        Nonce rotatedNonce = renew(clientId, initialNonce).nonce();
+
+        // Simulates a retry: the Client never learned rotatedNonce because the first
+        // response was lost, so it signs the Nonce it still has (ADR-0010's grace window).
+        RenewResponse graceResponse = renew(clientId, initialNonce);
+
+        assertThat(graceResponse.status()).isEqualTo(StatusCode.SUCCESS);
+        assertThat(graceResponse.nonce()).isEqualTo(rotatedNonce);
+
+        // A real Renewal with the actual current Nonce still works afterward.
+        RenewResponse realResponse = renew(clientId, rotatedNonce);
+        assertThat(realResponse.status()).isEqualTo(StatusCode.SUCCESS);
     }
 
     @Test
     void cancelRegisteredClientSucceeds() {
         ClientId clientId = ClientId.parse("123456789012");
-        register(clientId);
+        Nonce nonce = register(clientId).nonce();
 
-        assertThat(service.handle(new CancelRequest(clientId))).isEqualTo(new CancelResponse(StatusCode.SUCCESS));
+        assertThat(cancel(clientId, nonce)).isEqualTo(CancelResponse.success());
     }
 
     @Test
     void cancelUnregisteredClientIsRejected() {
         ClientId clientId = ClientId.parse("123456789012");
 
-        assertThat(service.handle(new CancelRequest(clientId))).isEqualTo(new CancelResponse(StatusCode.NOT_REGISTERED));
+        assertThat(cancel(clientId, Nonce.random())).isEqualTo(CancelResponse.notRegistered());
+    }
+
+    @Test
+    void cancelWithWrongNonceReturnsInvalidToken() {
+        ClientId clientId = ClientId.parse("123456789012");
+        Nonce nonce = register(clientId).nonce();
+
+        CancelResponse response = cancel(clientId, Nonce.random());
+
+        assertThat(response.status()).isEqualTo(StatusCode.INVALID_TOKEN);
+        assertThat(response.nonce()).isEqualTo(nonce);
     }
 
     @Test
     void cancelledClientCanRegisterAgain() {
         ClientId clientId = ClientId.parse("123456789012");
-        register(clientId);
-        service.handle(new CancelRequest(clientId));
+        Nonce nonce = register(clientId).nonce();
+        cancel(clientId, nonce);
 
-        assertThat(register(clientId)).isEqualTo(RegisterResponse.success(VALIDITY_PERIOD_SECONDS));
+        RegisterResponse response = register(clientId);
+
+        assertThat(response.status()).isEqualTo(StatusCode.SUCCESS);
     }
 
     private RegisterResponse register(ClientId clientId) {
         RegisterResponse challengeResponse = (RegisterResponse) service.handle(RegisterRequest.initial(clientId));
         ChallengeResponse signature = Ed25519.sign(signingKey, challengeResponse.challenge());
         return (RegisterResponse) service.handle(RegisterRequest.withChallengeResponse(clientId, signature));
+    }
+
+    private RenewResponse renew(ClientId clientId, Nonce nonceToSign) {
+        NonceSignature signature = Ed25519.sign(signingKey, nonceToSign);
+        return (RenewResponse) service.handle(new RenewRequest(clientId, signature));
+    }
+
+    private CancelResponse cancel(ClientId clientId, Nonce nonceToSign) {
+        NonceSignature signature = Ed25519.sign(signingKey, nonceToSign);
+        return (CancelResponse) service.handle(new CancelRequest(clientId, signature));
     }
 }

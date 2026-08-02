@@ -7,7 +7,7 @@ A Client/Server system simulating registration and active-state maintenance of u
 ### Core
 
 **Client**:
-A process that registers with the Server and periodically sends a Renewal before its Registration's Validity Period lapses. Holds no persistent connection and no server-assigned state — each Renewal or Cancellation is one short-lived connection: connect, send, receive response, disconnect. A Register attempt is two such connections in sequence (get a Challenge, then submit a Challenge Response), never one held open across both (ADR-0009).
+A process that registers with the Server and periodically sends a Renewal before its Registration's Validity Period lapses. Holds no persistent connection — each Renewal or Cancellation is one short-lived connection: connect, send, receive response, disconnect. A Register attempt is two such connections in sequence (get a Challenge, then submit a Challenge Response), never one held open across both (ADR-0009). The Server does hold state tied to the Client between calls (the current Nonce, ADR-0010) — but that's server-assigned per-Registration state, not a persistent connection or anything resembling a Session.
 _Avoid_: Session
 
 **Client ID**:
@@ -35,17 +35,17 @@ The duration for which a Registration remains valid without being renewed. Set b
 _Avoid_: Lease, TTL, Timeout
 
 **Renewal**:
-A message a Client sends before its Validity Period lapses, extending its Registration for another Validity Period. Uses the same Client ID as the original Registration.
+A message a Client sends before its Validity Period lapses, extending its Registration for another Validity Period. Uses the same Client ID as the original Registration, and must carry a Nonce Signature proving the Client holds the Shared Signing Key (ADR-0010).
 
 **Expiration**:
 The Server's removal of a Client's Registration after its Validity Period lapses with no Renewal — never driven by any Client message. The mechanism differs by implementation: Redis key TTL for the Distributed Server, a dedicated reaper thread for the Centralized Server. Distinct from Cancellation, which is Client-initiated.
 
 **Cancellation**:
-A Client's voluntary request to remove its own Registration before its Validity Period lapses (ADR-0004). Distinct from Expiration: Cancellation is Client-driven and immediate; Expiration is Server-driven and timeout-based.
+A Client's voluntary request to remove its own Registration before its Validity Period lapses (ADR-0004), authenticated the same way as a Renewal — a Nonce Signature (ADR-0010). Distinct from Expiration: Cancellation is Client-driven and immediate; Expiration is Server-driven and timeout-based.
 _Avoid_: Unregister, Deregister
 
 **Challenge**:
-A random 32-byte nonce the Server generates and holds (in the Challenge Store) when a Client ID with no live Registration sends its initial Register attempt. Expires after 30 seconds and is discarded after any verification attempt, success or failure — never reusable (ADR-0009).
+A random 32-byte value the Server generates and holds (in the Challenge Store) when a Client ID with no live Registration sends its initial Register attempt. Expires after 30 seconds and is discarded after any verification attempt, success or failure — never reusable (ADR-0009). Distinct from Nonce: a Challenge exists only before a Registration does and is used exactly once; a Nonce exists only while a Registration is live and rotates.
 
 **Challenge Response**:
 The Ed25519 signature over a Challenge, computed by the Client with the Shared Signing Key's private key, submitted back to the Server to complete Registration. Verified against the Shared Signing Key's public key. Distinct from the many `*Response` protocol messages (`RegisterResponse`, etc.) — this is the signature itself, one field within a Register attempt's second request.
@@ -55,7 +55,13 @@ _Avoid_: Response (ambiguous with protocol message names), Signature (use in imp
 The Server's in-memory store of issued, not-yet-verified Challenges, keyed by Client ID.
 
 **Shared Signing Key**:
-The single Ed25519 keypair configured for a Client Simulator run: every Simulated Client signs its Challenge with the same private key, and the Server verifies every Challenge Response against the same public key. Not a per-Client credential — this simulates the challenge-response mechanism, not a multi-tenant identity system (ADR-0009).
+The single Ed25519 keypair configured for a Client Simulator run: every Simulated Client signs its Challenge with the same private key, and the Server verifies every Challenge Response against the same public key. Not a per-Client credential — this simulates the challenge-response mechanism, not a multi-tenant identity system (ADR-0009). Also used to produce every Nonce Signature (ADR-0010) — the same keypair authenticates Register, Renewal, and Cancellation.
+
+**Nonce**:
+A random 32-byte value the Server holds for a live Registration, distinct from Challenge: issued fresh when Register succeeds, replaced by a new one on every successful Renewal, and discarded when the Registration is cancelled or expires. A Renewal or Cancellation must carry a Nonce Signature proving the Client holds the Shared Signing Key (ADR-0010).
+
+**Nonce Signature**:
+The Ed25519 signature over the current Nonce, computed by the Client with the Shared Signing Key's private key, submitted as the Renewal's or Cancellation's authentication credential. Verified against the Shared Signing Key's public key, same as a Challenge Response — but over a Nonce instead of a Challenge.
 
 ### Client Simulator
 

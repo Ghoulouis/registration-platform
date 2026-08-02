@@ -3,9 +3,12 @@ package com.registration.client.simulation;
 import com.registration.client.retry.CallFailedException;
 import com.registration.client.retry.RetryingRequester;
 import com.registration.client.stats.OperationType;
+import com.registration.common.crypto.Ed25519;
 import com.registration.common.protocol.CancelRequest;
 import com.registration.common.protocol.CancelResponse;
 import com.registration.common.protocol.ClientId;
+import com.registration.common.protocol.Nonce;
+import com.registration.common.protocol.NonceSignature;
 import com.registration.common.protocol.RegisterResponse;
 import com.registration.common.protocol.RenewRequest;
 import com.registration.common.protocol.RenewResponse;
@@ -32,6 +35,10 @@ public final class SimulatedClient implements Runnable {
     private final int assumedValidityPeriodSeconds;
     private final int renewalWindowMinPercent;
     private final int renewalWindowMaxPercent;
+
+    // Set from Register's response, updated after every successful Renewal (ADR-0010).
+    // Touched only by this Simulated Client's own thread - no synchronization needed.
+    private Nonce currentNonce;
 
     public SimulatedClient(
             ClientId clientId,
@@ -78,6 +85,7 @@ public final class SimulatedClient implements Runnable {
     private int register() throws InterruptedException {
         RegisterResponse response = requester.register(clientId, signingKey);
         if (response.status() == StatusCode.SUCCESS) {
+            currentNonce = response.nonce();
             log.debug("[{}] REGISTER succeeded, validity period {}s", clientId, response.validityPeriodSeconds());
             return response.validityPeriodSeconds();
         }
@@ -85,7 +93,9 @@ public final class SimulatedClient implements Runnable {
             // Almost certainly our own earlier attempt landing (ADR-0005) — Client IDs are
             // independently random, so we proceed as registered. The Server doesn't return a
             // real period on this status, so fall back to our own assumed value, same as we
-            // would before any authoritative response (grilled Question 5).
+            // would before any authoritative response (grilled Question 5). It does return the
+            // current Nonce though (ADR-0010) — without that we'd have no way to ever Renew.
+            currentNonce = response.nonce();
             log.info("[{}] REGISTER returned ALREADY_REGISTERED, proceeding as registered "
                     + "with assumed validity period {}s", clientId, assumedValidityPeriodSeconds);
             return assumedValidityPeriodSeconds;
@@ -96,23 +106,26 @@ public final class SimulatedClient implements Runnable {
     }
 
     private int renew() throws InterruptedException {
+        NonceSignature signature = Ed25519.sign(signingKey, currentNonce);
         RenewResponse response;
         try {
-            response = (RenewResponse) requester.send(OperationType.RENEW, new RenewRequest(clientId));
+            response = (RenewResponse) requester.send(OperationType.RENEW, new RenewRequest(clientId, signature));
         } catch (CallFailedException e) {
             throw new RenewalFailedException(e.getMessage());
         }
         if (response.status() != StatusCode.SUCCESS) {
             throw new RenewalFailedException("Server returned " + response.status());
         }
+        currentNonce = response.nonce();
         log.debug("[{}] RENEW succeeded, validity period {}s", clientId, response.validityPeriodSeconds());
         return response.validityPeriodSeconds();
     }
 
     private void cancel() {
         try {
+            NonceSignature signature = Ed25519.sign(signingKey, currentNonce);
             CancelResponse response =
-                    (CancelResponse) requester.send(OperationType.CANCEL, new CancelRequest(clientId));
+                    (CancelResponse) requester.send(OperationType.CANCEL, new CancelRequest(clientId, signature));
             log.info("[{}] CANCEL returned {}", clientId, response.status());
         } catch (CallFailedException e) {
             log.debug("[{}] CANCEL failed (best-effort during shutdown): {}", clientId, e.getMessage());

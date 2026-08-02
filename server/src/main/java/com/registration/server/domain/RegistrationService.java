@@ -4,12 +4,12 @@ import com.registration.common.crypto.Ed25519;
 import com.registration.common.protocol.CancelRequest;
 import com.registration.common.protocol.CancelResponse;
 import com.registration.common.protocol.Challenge;
+import com.registration.common.protocol.Nonce;
 import com.registration.common.protocol.ProtocolMessage;
 import com.registration.common.protocol.RegisterRequest;
 import com.registration.common.protocol.RegisterResponse;
 import com.registration.common.protocol.RenewRequest;
 import com.registration.common.protocol.RenewResponse;
-import com.registration.common.protocol.StatusCode;
 import com.registration.server.config.RegistrationProperties;
 import com.registration.server.store.ChallengeStore;
 import com.registration.server.store.RegistrationStore;
@@ -20,9 +20,10 @@ import java.time.Duration;
 
 /**
  * Applies REGISTER/RENEW/CANCEL symmetry (ADR-0003, ADR-0004), same as the Distributed
- * Server's equivalent — synchronous here since {@link RegistrationStore} has no I/O to await.
- * REGISTER is a two-step Challenge/Challenge Response exchange (ADR-0009), handled here as
- * one stateless call per step; the Challenge Store carries state between the two.
+ * Server's equivalent — synchronous here since {@link RegistrationStore} has no I/O to
+ * await. REGISTER is a two-step Challenge/Challenge Response exchange (ADR-0009); RENEW and
+ * CANCEL are each authenticated by a Nonce Signature over the Registration's current (or
+ * immediately-previous, for retry-safety) Nonce (ADR-0010).
  */
 @Service
 public class RegistrationService {
@@ -59,8 +60,9 @@ public class RegistrationService {
     }
 
     private RegisterResponse issueChallenge(RegisterRequest request) {
-        if (store.isRegistered(request.clientId())) {
-            return RegisterResponse.alreadyRegistered();
+        RegistrationStore.NonceState nonceState = store.nonceState(request.clientId());
+        if (nonceState != null) {
+            return RegisterResponse.alreadyRegistered(nonceState.current());
         }
         Challenge challenge = challengeStore.issue(request.clientId(), challengeTtl);
         return RegisterResponse.challenge(challenge);
@@ -71,22 +73,49 @@ public class RegistrationService {
         if (challenge == null || !Ed25519.verify(authPublicKey, challenge, request.challengeResponse())) {
             return RegisterResponse.challengeRejected();
         }
-        boolean created = store.tryRegister(request.clientId(), validityPeriod);
-        return created ? RegisterResponse.success((int) validityPeriod.toSeconds()) : RegisterResponse.alreadyRegistered();
+        Nonce initialNonce = Nonce.random();
+        boolean created = store.tryRegister(request.clientId(), validityPeriod, initialNonce);
+        if (created) {
+            return RegisterResponse.success((int) validityPeriod.toSeconds(), initialNonce);
+        }
+        // Lost the race to a concurrent successful attempt for the same Client ID; report its Nonce.
+        RegistrationStore.NonceState nonceState = store.nonceState(request.clientId());
+        return RegisterResponse.alreadyRegistered(nonceState.current());
     }
 
-    private ProtocolMessage renew(RenewRequest request) {
-        boolean renewed = store.renew(request.clientId(), validityPeriod);
-        return renewed
-                ? new RenewResponse(StatusCode.SUCCESS, (int) validityPeriod.toSeconds())
-                : new RenewResponse(StatusCode.NOT_REGISTERED, 0);
+    private RenewResponse renew(RenewRequest request) {
+        RegistrationStore.NonceState nonceState = store.nonceState(request.clientId());
+        if (nonceState == null) {
+            return RenewResponse.notRegistered();
+        }
+        if (Ed25519.verify(authPublicKey, nonceState.current(), request.nonceSignature())) {
+            Nonce newNonce = Nonce.random();
+            boolean rotated = store.rotateNonce(request.clientId(), validityPeriod, newNonce);
+            return rotated
+                    ? RenewResponse.success((int) validityPeriod.toSeconds(), newNonce)
+                    : RenewResponse.notRegistered();
+        }
+        if (nonceState.previous() != null && Ed25519.verify(authPublicKey, nonceState.previous(), request.nonceSignature())) {
+            // Our own earlier successful rotation landing again (its response was lost) - re-serve
+            // the same current Nonce without rotating further, so this is safe to hit repeatedly.
+            return RenewResponse.success((int) validityPeriod.toSeconds(), nonceState.current());
+        }
+        return RenewResponse.invalidToken(nonceState.current());
     }
 
-    private ProtocolMessage cancel(CancelRequest request) {
-        boolean cancelled = store.cancel(request.clientId());
-        return cancelled
-                ? new CancelResponse(StatusCode.SUCCESS)
-                : new CancelResponse(StatusCode.NOT_REGISTERED);
+    private CancelResponse cancel(CancelRequest request) {
+        RegistrationStore.NonceState nonceState = store.nonceState(request.clientId());
+        if (nonceState == null) {
+            return CancelResponse.notRegistered();
+        }
+        boolean validSignature = Ed25519.verify(authPublicKey, nonceState.current(), request.nonceSignature())
+                || (nonceState.previous() != null
+                        && Ed25519.verify(authPublicKey, nonceState.previous(), request.nonceSignature()));
+        if (!validSignature) {
+            return CancelResponse.invalidToken(nonceState.current());
+        }
+        store.cancel(request.clientId());
+        return CancelResponse.success();
     }
 
     private static IllegalArgumentException unexpected(ProtocolMessage request) {

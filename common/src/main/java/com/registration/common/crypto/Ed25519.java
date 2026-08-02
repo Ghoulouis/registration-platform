@@ -2,6 +2,8 @@ package com.registration.common.crypto;
 
 import com.registration.common.protocol.Challenge;
 import com.registration.common.protocol.ChallengeResponse;
+import com.registration.common.protocol.Nonce;
+import com.registration.common.protocol.NonceSignature;
 
 import java.security.GeneralSecurityException;
 import java.security.KeyFactory;
@@ -80,6 +82,28 @@ public final class Ed25519 {
             verifier.initVerify(publicKey);
             verifier.update(challenge.value());
             return verifier.verify(response.value());
+        } catch (GeneralSecurityException e) {
+            return false;
+        }
+    }
+
+    public static NonceSignature sign(PrivateKey privateKey, Nonce nonce) {
+        try {
+            Signature signature = Signature.getInstance(ALGORITHM);
+            signature.initSign(privateKey);
+            signature.update(nonce.value());
+            return NonceSignature.of(signature.sign());
+        } catch (GeneralSecurityException e) {
+            throw new IllegalStateException("Failed to sign Nonce", e);
+        }
+    }
+
+    public static boolean verify(PublicKey publicKey, Nonce nonce, NonceSignature signature) {
+        try {
+            Signature verifier = Signature.getInstance(ALGORITHM);
+            verifier.initVerify(publicKey);
+            verifier.update(nonce.value());
+            return verifier.verify(signature.value());
         } catch (GeneralSecurityException e) {
             return false;
         }

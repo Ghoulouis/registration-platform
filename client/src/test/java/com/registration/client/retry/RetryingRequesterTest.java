@@ -7,6 +7,7 @@ import com.registration.client.testsupport.ScriptedTcpServer;
 import com.registration.common.crypto.Ed25519;
 import com.registration.common.protocol.Challenge;
 import com.registration.common.protocol.ClientId;
+import com.registration.common.protocol.Nonce;
 import com.registration.common.protocol.RegisterResponse;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -48,12 +49,13 @@ class RetryingRequesterTest {
 
     @Test
     void succeedsOnFirstAttempt() throws InterruptedException {
+        Nonce nonce = Nonce.random();
         server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.challenge(Challenge.random())));
-        server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.success(60)));
+        server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.success(60, nonce)));
 
         var response = requester.register(CLIENT_ID, SIGNING_KEY);
 
-        assertThat(response).isEqualTo(RegisterResponse.success(60));
+        assertThat(response).isEqualTo(RegisterResponse.success(60, nonce));
         var snapshot = stats.forType(OperationType.REGISTER).snapshot();
         assertThat(snapshot.totalAttempts()).isEqualTo(1);
         assertThat(snapshot.retryAttempts()).isEqualTo(0);
@@ -62,13 +64,14 @@ class RetryingRequesterTest {
 
     @Test
     void succeedsAfterTimeoutThenRetrySucceeds() throws InterruptedException {
+        Nonce nonce = Nonce.random();
         server.enqueue(ScriptedTcpServer.Behavior.dropAfter(TIMEOUT.toMillis() + 100));
         server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.challenge(Challenge.random())));
-        server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.success(60)));
+        server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.success(60, nonce)));
 
         var response = requester.register(CLIENT_ID, SIGNING_KEY);
 
-        assertThat(response).isEqualTo(RegisterResponse.success(60));
+        assertThat(response).isEqualTo(RegisterResponse.success(60, nonce));
         var snapshot = stats.forType(OperationType.REGISTER).snapshot();
         assertThat(snapshot.totalAttempts()).isEqualTo(2);
         assertThat(snapshot.retryAttempts()).isEqualTo(1);
@@ -78,25 +81,27 @@ class RetryingRequesterTest {
 
     @Test
     void alreadyRegisteredOnRetryIsTreatedAsSuccess() throws InterruptedException {
+        Nonce nonce = Nonce.random();
         // ALREADY_REGISTERED short-circuits at Step 1 (no Challenge issued), so the retried
         // attempt is a single connection, same as the dropped first attempt.
         server.enqueue(ScriptedTcpServer.Behavior.dropAfter(TIMEOUT.toMillis() + 100));
-        server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.alreadyRegistered()));
+        server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.alreadyRegistered(nonce)));
 
         var response = requester.register(CLIENT_ID, SIGNING_KEY);
 
-        assertThat(response).isEqualTo(RegisterResponse.alreadyRegistered());
+        assertThat(response).isEqualTo(RegisterResponse.alreadyRegistered(nonce));
         assertThat(stats.forType(OperationType.REGISTER).snapshot().successes()).isEqualTo(1);
         assertThat(stats.forType(OperationType.REGISTER).snapshot().failures()).isEqualTo(0);
     }
 
     @Test
     void alreadyRegisteredOnFirstAttemptIsAFailure() throws InterruptedException {
-        server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.alreadyRegistered()));
+        Nonce nonce = Nonce.random();
+        server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.alreadyRegistered(nonce)));
 
         var response = requester.register(CLIENT_ID, SIGNING_KEY);
 
-        assertThat(response).isEqualTo(RegisterResponse.alreadyRegistered());
+        assertThat(response).isEqualTo(RegisterResponse.alreadyRegistered(nonce));
         assertThat(stats.forType(OperationType.REGISTER).snapshot().successes()).isEqualTo(0);
         assertThat(stats.forType(OperationType.REGISTER).snapshot().failures()).isEqualTo(1);
     }
