@@ -28,10 +28,12 @@ import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * Wraps every REGISTER/RENEW/CANCEL attempt with exponential backoff + jitter (grilled
- * Q7b), recording stats per attempt, applying the retry-own-terminal-status-is-success rule
- * (ADR-0005), and stamping every connection attempt with a Trace Context (ADR-0012): one
- * Trace ID per call to {@link #register}/{@link #renew}/{@link #cancel}, a fresh Span ID for
- * every retry (and, for Register, for each of its two legs).
+ * Q7b), recording stats per attempt, and applying the retry-own-terminal-status-is-success
+ * rule (ADR-0005). The Trace itself belongs to the caller — one business transaction, one
+ * Trace, decided by {@code SimulatedClient} (ADR-0012 revision: Trace ID generation moved
+ * out of this class, since a generic retry/transport utility shouldn't be the one deciding
+ * when a business transaction begins). This class only ever mints a fresh Span per
+ * connection attempt (each retry, and Register's second leg) within the Trace it's given.
  */
 public final class RetryingRequester {
 
@@ -58,9 +60,10 @@ public final class RetryingRequester {
      * @throws CallFailedException if every attempt (initial + retries) failed
      * @throws InterruptedException if interrupted while backing off between retries
      */
-    public RegisterResponse register(ClientId clientId, PrivateKey signingKey) throws InterruptedException {
-        return executeWithRetry(OperationType.REGISTER,
-                trace -> attemptRegister(clientId, signingKey, trace),
+    public RegisterResponse register(ClientId clientId, PrivateKey signingKey, TraceContext trace)
+            throws InterruptedException {
+        return executeWithRetry(OperationType.REGISTER, trace,
+                t -> attemptRegister(clientId, signingKey, t),
                 RetryingRequester::isRegisterSuccess);
     }
 
@@ -68,9 +71,10 @@ public final class RetryingRequester {
      * @throws CallFailedException if every attempt (initial + retries) failed
      * @throws InterruptedException if interrupted while backing off between retries
      */
-    public RenewResponse renew(ClientId clientId, NonceSignature nonceSignature) throws InterruptedException {
-        return executeWithRetry(OperationType.RENEW,
-                trace -> (RenewResponse) tcpClient.send(new RenewRequest(clientId, trace, nonceSignature)),
+    public RenewResponse renew(ClientId clientId, NonceSignature nonceSignature, TraceContext trace)
+            throws InterruptedException {
+        return executeWithRetry(OperationType.RENEW, trace,
+                t -> (RenewResponse) tcpClient.send(new RenewRequest(clientId, t, nonceSignature)),
                 RetryingRequester::isRenewSuccess);
     }
 
@@ -78,9 +82,10 @@ public final class RetryingRequester {
      * @throws CallFailedException if every attempt (initial + retries) failed
      * @throws InterruptedException if interrupted while backing off between retries
      */
-    public CancelResponse cancel(ClientId clientId, NonceSignature nonceSignature) throws InterruptedException {
-        return executeWithRetry(OperationType.CANCEL,
-                trace -> (CancelResponse) tcpClient.send(new CancelRequest(clientId, trace, nonceSignature)),
+    public CancelResponse cancel(ClientId clientId, NonceSignature nonceSignature, TraceContext trace)
+            throws InterruptedException {
+        return executeWithRetry(OperationType.CANCEL, trace,
+                t -> (CancelResponse) tcpClient.send(new CancelRequest(clientId, t, nonceSignature)),
                 RetryingRequester::isCancelSuccess);
     }
 
@@ -94,15 +99,15 @@ public final class RetryingRequester {
         NonceSignature signature = Ed25519.sign(signingKey, initial.nonce());
         // Step 2 is a separate connection attempt - its own Span ID, same Trace (ADR-0012).
         TraceContext confirmSpan = trace.newSpan();
-        putTraceContext(confirmSpan);
+        putSpanId(confirmSpan);
         log.debug("[{}] REGISTER submitting_auth_data", clientId);
         return (RegisterResponse) tcpClient.send(RegisterRequest.withNonceSignature(clientId, confirmSpan, signature));
     }
 
-    private <T> T executeWithRetry(OperationType type, Attempt<T> attempt, ResultIsSuccess<T> isSuccess)
+    private <T> T executeWithRetry(
+            OperationType type, TraceContext trace, Attempt<T> attempt, ResultIsSuccess<T> isSuccess)
             throws InterruptedException {
         OperationStats operationStats = stats.forType(type);
-        TraceContext trace = TraceContext.newTrace();
         int attemptNumber = 0;
 
         while (true) {
@@ -114,7 +119,7 @@ public final class RetryingRequester {
             operationStats.recordAttempt(isRetry);
 
             long startNanos = System.nanoTime();
-            putTraceContext(trace);
+            putSpanId(trace);
             try {
                 T response = attempt.run(trace);
                 operationStats.recordResponseTime((System.nanoTime() - startNanos) / 1_000_000);
@@ -131,26 +136,15 @@ public final class RetryingRequester {
                     operationStats.recordOutcome(false);
                     throw new CallFailedException("Connection error after " + attemptNumber + " attempts", e);
                 }
-            } finally {
-                clearTraceContext();
             }
 
             Thread.sleep(backoffWithJitterMillis(attemptNumber));
         }
     }
 
-    /** Mirrors the Server's TcpServer MDC wiring (ADR-0012), so Client-side step logs (this class
-     * only — SimulatedClient's own logs happen after this call returns, MDC already cleared)
-     * carry the same traceId/spanId the Server logs for the matching connection attempt. */
-    private static void putTraceContext(TraceContext trace) {
-        HexFormat hex = HexFormat.of();
-        MDC.put("traceId", hex.formatHex(trace.traceId()));
-        MDC.put("spanId", hex.formatHex(trace.spanId()));
-    }
-
-    private static void clearTraceContext() {
-        MDC.remove("traceId");
-        MDC.remove("spanId");
+    /** Only touches spanId - traceId belongs to the caller (SimulatedClient) for the whole transaction. */
+    private static void putSpanId(TraceContext trace) {
+        MDC.put("spanId", HexFormat.of().formatHex(trace.spanId()));
     }
 
     private static boolean isRegisterSuccess(RegisterResponse response, boolean isRetry) {

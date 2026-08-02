@@ -10,10 +10,13 @@ import com.registration.common.protocol.NonceSignature;
 import com.registration.common.protocol.RegisterResponse;
 import com.registration.common.protocol.RenewResponse;
 import com.registration.common.protocol.StatusCode;
+import com.registration.common.protocol.TraceContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 import java.security.PrivateKey;
+import java.util.HexFormat;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
@@ -21,6 +24,13 @@ import java.util.concurrent.ThreadLocalRandom;
  * randomized schedule (ADR-0006's Renewal Window) until interrupted, then a
  * best-effort voluntary CANCEL (ADR-0004). Runs entirely on the virtual thread that
  * invokes {@link #run()} — no shared mutable state with other Simulated Clients.
+ *
+ * <p>Owns the Trace for each business transaction (ADR-0012 revision): a Trace represents
+ * one REGISTER/RENEW/CANCEL as decided here, not inside {@link RetryingRequester}, which is
+ * generic transport/retry machinery with no business of deciding when a transaction begins.
+ * Each of {@link #register}/{@link #renew}/{@link #cancel} mints its own Trace, holds it in
+ * MDC for the transaction's full duration — including its own outcome log line — and clears
+ * it before returning.
  */
 public final class SimulatedClient implements Runnable {
 
@@ -58,8 +68,7 @@ public final class SimulatedClient implements Runnable {
         try {
             validityPeriodSeconds = register();
         } catch (CallFailedException e) {
-            log.debug("[{}] REGISTER failed -> REJECTED: {}", clientId, e.getMessage());
-            return;
+            return; // already logged inside register(), with its Trace still in scope
         } catch (InterruptedException e) {
             return; // shut down before ever registering; nothing to cancel
         }
@@ -72,62 +81,77 @@ public final class SimulatedClient implements Runnable {
         } catch (InterruptedException e) {
             // shutdown signal: fall through to voluntary Cancellation
         } catch (RenewalFailedException e) {
-            log.debug("[{}] RENEW failed -> REJECTED: {}", clientId, e.getMessage());
-            return; // not confident we're still registered; don't attempt to cancel
+            // already logged inside renew(); not confident we're still registered, don't cancel
+            return;
         }
 
         cancel();
     }
 
     private int register() throws InterruptedException {
-        RegisterResponse response = requester.register(clientId, signingKey);
-        if (response.status() == StatusCode.SUCCESS) {
-            currentNonce = response.nonce();
-            log.debug("[{}] REGISTER success -> SUCCESS (validity period {}s)", clientId, response.validityPeriodSeconds());
-            return response.validityPeriodSeconds();
+        TraceContext trace = TraceContext.newTrace();
+        putTraceContext(trace);
+        try {
+            RegisterResponse response = requester.register(clientId, signingKey, trace);
+            if (response.status() == StatusCode.SUCCESS) {
+                currentNonce = response.nonce();
+                log.debug("[{}] REGISTER success -> SUCCESS (validity period {}s)", clientId, response.validityPeriodSeconds());
+                return response.validityPeriodSeconds();
+            }
+            if (response.status() == StatusCode.ALREADY_REGISTERED) {
+                currentNonce = response.nonce();
+                log.info("[{}] REGISTER already_registered -> REJECTED (proceeding as registered, "
+                        + "assumed validity period {}s)", clientId, assumedValidityPeriodSeconds);
+                return assumedValidityPeriodSeconds;
+            }
+            throw new CallFailedException("REGISTER challenge rejected");
+        } catch (CallFailedException e) {
+            log.debug("[{}] REGISTER failed -> REJECTED: {}", clientId, e.getMessage());
+            throw e;
+        } finally {
+            clearTraceContext();
         }
-        if (response.status() == StatusCode.ALREADY_REGISTERED) {
-            // Almost certainly our own earlier attempt landing (ADR-0005) — Client IDs are
-            // independently random, so we proceed as registered. The Server doesn't return a
-            // real period on this status, so fall back to our own assumed value, same as we
-            // would before any authoritative response (grilled Question 5). It does return the
-            // current Nonce though (ADR-0010) — without that we'd have no way to ever Renew.
-            currentNonce = response.nonce();
-            log.info("[{}] REGISTER already_registered -> REJECTED (proceeding as registered, "
-                    + "assumed validity period {}s)", clientId, assumedValidityPeriodSeconds);
-            return assumedValidityPeriodSeconds;
-        }
-        // CHALLENGE_REJECTED: genuinely failed to authenticate (expired or already-consumed
-        // pending Nonce) — unlike ALREADY_REGISTERED, this isn't our own earlier attempt landing.
-        throw new CallFailedException("REGISTER challenge rejected");
     }
 
     private int renew() throws InterruptedException {
-        NonceSignature signature = Ed25519.sign(signingKey, currentNonce);
-        RenewResponse response;
+        TraceContext trace = TraceContext.newTrace();
+        putTraceContext(trace);
         try {
-            response = requester.renew(clientId, signature);
-        } catch (CallFailedException e) {
-            throw new RenewalFailedException(e.getMessage());
+            NonceSignature signature = Ed25519.sign(signingKey, currentNonce);
+            RenewResponse response;
+            try {
+                response = requester.renew(clientId, signature, trace);
+            } catch (CallFailedException e) {
+                throw new RenewalFailedException(e.getMessage());
+            }
+            if (response.status() != StatusCode.SUCCESS) {
+                throw new RenewalFailedException("Server returned " + response.status());
+            }
+            currentNonce = response.nonce();
+            log.debug("[{}] RENEW success -> SUCCESS (validity period {}s)", clientId, response.validityPeriodSeconds());
+            return response.validityPeriodSeconds();
+        } catch (RenewalFailedException e) {
+            log.debug("[{}] RENEW failed -> REJECTED: {}", clientId, e.getMessage());
+            throw e;
+        } finally {
+            clearTraceContext();
         }
-        if (response.status() != StatusCode.SUCCESS) {
-            throw new RenewalFailedException("Server returned " + response.status());
-        }
-        currentNonce = response.nonce();
-        log.debug("[{}] RENEW success -> SUCCESS (validity period {}s)", clientId, response.validityPeriodSeconds());
-        return response.validityPeriodSeconds();
     }
 
     private void cancel() {
+        TraceContext trace = TraceContext.newTrace();
+        putTraceContext(trace);
         try {
             NonceSignature signature = Ed25519.sign(signingKey, currentNonce);
-            CancelResponse response = requester.cancel(clientId, signature);
+            CancelResponse response = requester.cancel(clientId, signature, trace);
             String result = response.status() == StatusCode.SUCCESS ? "SUCCESS" : "REJECTED";
             log.info("[{}] CANCEL {} -> {}", clientId, response.status().name().toLowerCase(), result);
         } catch (CallFailedException e) {
             log.debug("[{}] CANCEL failed -> REJECTED (best-effort during shutdown): {}", clientId, e.getMessage());
         } catch (InterruptedException e) {
             // already shutting down; nothing more to do
+        } finally {
+            clearTraceContext();
         }
     }
 
@@ -136,6 +160,17 @@ public final class SimulatedClient implements Runnable {
         double maxFraction = renewalWindowMaxPercent / 100.0;
         double fraction = ThreadLocalRandom.current().nextDouble(minFraction, maxFraction);
         return (long) (validityPeriodSeconds * 1000L * fraction);
+    }
+
+    private static void putTraceContext(TraceContext trace) {
+        HexFormat hex = HexFormat.of();
+        MDC.put("traceId", hex.formatHex(trace.traceId()));
+        MDC.put("spanId", hex.formatHex(trace.spanId()));
+    }
+
+    private static void clearTraceContext() {
+        MDC.remove("traceId");
+        MDC.remove("spanId");
     }
 
     private static final class RenewalFailedException extends RuntimeException {

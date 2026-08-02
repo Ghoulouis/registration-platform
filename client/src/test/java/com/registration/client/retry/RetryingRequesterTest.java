@@ -8,6 +8,7 @@ import com.registration.common.crypto.Ed25519;
 import com.registration.common.protocol.ClientId;
 import com.registration.common.protocol.Nonce;
 import com.registration.common.protocol.RegisterResponse;
+import com.registration.common.protocol.TraceContext;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -52,7 +53,7 @@ class RetryingRequesterTest {
         server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.challenge(Nonce.random())));
         server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.success(60, nonce)));
 
-        var response = requester.register(CLIENT_ID, SIGNING_KEY);
+        var response = requester.register(CLIENT_ID, SIGNING_KEY, TraceContext.newTrace());
 
         assertThat(response).isEqualTo(RegisterResponse.success(60, nonce));
         var snapshot = stats.forType(OperationType.REGISTER).snapshot();
@@ -68,7 +69,7 @@ class RetryingRequesterTest {
         server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.challenge(Nonce.random())));
         server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.success(60, nonce)));
 
-        var response = requester.register(CLIENT_ID, SIGNING_KEY);
+        var response = requester.register(CLIENT_ID, SIGNING_KEY, TraceContext.newTrace());
 
         assertThat(response).isEqualTo(RegisterResponse.success(60, nonce));
         var snapshot = stats.forType(OperationType.REGISTER).snapshot();
@@ -86,7 +87,7 @@ class RetryingRequesterTest {
         server.enqueue(ScriptedTcpServer.Behavior.dropAfter(TIMEOUT.toMillis() + 100));
         server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.alreadyRegistered(nonce)));
 
-        var response = requester.register(CLIENT_ID, SIGNING_KEY);
+        var response = requester.register(CLIENT_ID, SIGNING_KEY, TraceContext.newTrace());
 
         assertThat(response).isEqualTo(RegisterResponse.alreadyRegistered(nonce));
         assertThat(stats.forType(OperationType.REGISTER).snapshot().successes()).isEqualTo(1);
@@ -98,7 +99,7 @@ class RetryingRequesterTest {
         Nonce nonce = Nonce.random();
         server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.alreadyRegistered(nonce)));
 
-        var response = requester.register(CLIENT_ID, SIGNING_KEY);
+        var response = requester.register(CLIENT_ID, SIGNING_KEY, TraceContext.newTrace());
 
         assertThat(response).isEqualTo(RegisterResponse.alreadyRegistered(nonce));
         assertThat(stats.forType(OperationType.REGISTER).snapshot().successes()).isEqualTo(0);
@@ -113,7 +114,7 @@ class RetryingRequesterTest {
         server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.challenge(Nonce.random())));
         server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.challengeRejected()));
 
-        var response = requester.register(CLIENT_ID, SIGNING_KEY);
+        var response = requester.register(CLIENT_ID, SIGNING_KEY, TraceContext.newTrace());
 
         assertThat(response).isEqualTo(RegisterResponse.challengeRejected());
         assertThat(stats.forType(OperationType.REGISTER).snapshot().failures()).isEqualTo(1);
@@ -125,7 +126,7 @@ class RetryingRequesterTest {
             server.enqueue(ScriptedTcpServer.Behavior.dropAfter(TIMEOUT.toMillis() + 100));
         }
 
-        assertThatThrownBy(() -> requester.register(CLIENT_ID, SIGNING_KEY)).isInstanceOf(CallFailedException.class);
+        assertThatThrownBy(() -> requester.register(CLIENT_ID, SIGNING_KEY, TraceContext.newTrace())).isInstanceOf(CallFailedException.class);
 
         var snapshot = stats.forType(OperationType.REGISTER).snapshot();
         assertThat(snapshot.totalAttempts()).isEqualTo(4);
