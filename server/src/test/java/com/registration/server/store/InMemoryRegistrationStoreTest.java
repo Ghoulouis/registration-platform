@@ -2,17 +2,27 @@ package com.registration.server.store;
 
 import com.registration.common.protocol.ClientId;
 import com.registration.common.protocol.Nonce;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 class InMemoryRegistrationStoreTest {
 
     private static final ClientId CLIENT_ID = ClientId.parse("123456789012");
 
-    private final InMemoryRegistrationStore store = new InMemoryRegistrationStore();
+    // Matches production's default tick (application.yml) so these tests, which sleep only
+    // 20ms before invoking reapExpired() manually, exercise the reaper itself rather than
+    // racing the timer's own eviction.
+    private final InMemoryRegistrationStore store = new InMemoryRegistrationStore(100);
+
+    @AfterEach
+    void tearDown() {
+        store.shutdown();
+    }
 
     @Test
     void getIsNullForAnUntouchedClientId() {
@@ -140,5 +150,53 @@ class InMemoryRegistrationStoreTest {
         store.reapExpired();
 
         assertThat(store.get(CLIENT_ID)).isNotNull();
+    }
+
+    @Test
+    void timerEvictsExpiredPendingNonceWithoutTheReaper() {
+        InMemoryRegistrationStore fastStore = new InMemoryRegistrationStore(5);
+        try {
+            fastStore.issuePendingNonce(CLIENT_ID, Duration.ofMillis(1));
+
+            await().atMost(Duration.ofSeconds(1))
+                    .untilAsserted(() -> assertThat(fastStore.get(CLIENT_ID)).isNull());
+        } finally {
+            fastStore.shutdown();
+        }
+    }
+
+    @Test
+    void timerEvictsExpiredRegistrationWithoutTheReaper() {
+        InMemoryRegistrationStore fastStore = new InMemoryRegistrationStore(5);
+        try {
+            fastStore.issuePendingNonce(CLIENT_ID, Duration.ofSeconds(30));
+            fastStore.confirm(CLIENT_ID, Duration.ofMillis(1), Nonce.random());
+
+            await().atMost(Duration.ofSeconds(1))
+                    .untilAsserted(() -> assertThat(fastStore.get(CLIENT_ID)).isNull());
+        } finally {
+            fastStore.shutdown();
+        }
+    }
+
+    @Test
+    void aStaleEvictionTimeoutDoesNotClobberAConfirmedRegistration() throws InterruptedException {
+        // Regression for ADR-0016's compare-and-remove: the pending Nonce's short-lived
+        // eviction timeout must not delete the Registration that superseded it, even if it
+        // fires after confirm() has already moved the record to a new generation.
+        InMemoryRegistrationStore fastStore = new InMemoryRegistrationStore(5);
+        try {
+            Duration pendingNonceTtl = Duration.ofMillis(50);
+            fastStore.issuePendingNonce(CLIENT_ID, pendingNonceTtl);
+            fastStore.confirm(CLIENT_ID, Duration.ofSeconds(5), Nonce.random());
+
+            Thread.sleep(pendingNonceTtl.toMillis() + 100);
+
+            RegistrationStore.ClientRecord record = fastStore.get(CLIENT_ID);
+            assertThat(record).isNotNull();
+            assertThat(record.registered()).isTrue();
+        } finally {
+            fastStore.shutdown();
+        }
     }
 }

@@ -2,6 +2,11 @@ package com.registration.server.store;
 
 import com.registration.common.protocol.ClientId;
 import com.registration.common.protocol.Nonce;
+import io.netty.util.HashedWheelTimer;
+import io.netty.util.Timeout;
+import io.netty.util.Timer;
+import jakarta.annotation.PreDestroy;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -9,21 +14,39 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 /**
  * PENDING/CONFIRMED lifecycle and Nonce rotation (ADR-0011), without Redis (ADR-0007).
  * {@code computeIfPresent} gives the same create-only/extend-only atomicity Redis's
  * {@code SET NX}/{@code SET XX} gave the Distributed Server — moot here in practice since the
- * NIO reactor is single-threaded (ADR-0001), but kept for interface robustness. There's no
- * TTL to lean on for expiry, so {@link #reapExpired()} — run on Spring's scheduler thread,
- * isolated from both the reactor thread and connection handling itself — periodically evicts
- * lapsed entries; {@link #get} also checks eagerly, so correctness never depends on the
- * reaper's timing.
+ * NIO reactor is single-threaded (ADR-0001), but kept for interface robustness.
+ *
+ * <p>Expiry is driven per-record by a {@link HashedWheelTimer} rather than a full-table scan
+ * (ADR-0016): every write schedules its own eviction and cancels whatever timeout previously
+ * owned that Client ID. A stale timeout firing after its record has moved to a newer
+ * generation is a no-op — eviction is a compare-and-remove against the exact {@link Record}
+ * instance captured when the timeout was scheduled, never an unconditional removal.
+ * {@link #reapExpired()} still runs, at a far lower frequency, purely as a defense-in-depth
+ * safety net; {@link #get} also checks eagerly, so correctness never depends on either timing
+ * mechanism.
  */
 @Component
 public class InMemoryRegistrationStore implements RegistrationStore {
 
     private final Map<ClientId, Record> recordsByClientId = new ConcurrentHashMap<>();
+    private final Map<ClientId, Timeout> evictionsByClientId = new ConcurrentHashMap<>();
+    private final Timer timer;
+
+    public InMemoryRegistrationStore(
+            @Value("${registration.timer-tick-duration-millis:100}") long timerTickDurationMillis) {
+        this.timer = new HashedWheelTimer(timerTickDurationMillis, TimeUnit.MILLISECONDS);
+    }
+
+    @PreDestroy
+    public void shutdown() {
+        timer.stop();
+    }
 
     @Override
     public ClientRecord get(ClientId clientId) {
@@ -38,7 +61,9 @@ public class InMemoryRegistrationStore implements RegistrationStore {
     public Nonce issuePendingNonce(ClientId clientId, Duration nonceTtl) {
         Nonce nonce = Nonce.random();
         Instant nonceExpiresAt = Instant.now().plus(nonceTtl);
-        recordsByClientId.put(clientId, new Record(false, nonce, null, null, nonceExpiresAt, null));
+        Record record = new Record(false, nonce, null, null, nonceExpiresAt, null);
+        recordsByClientId.put(clientId, record);
+        scheduleEviction(clientId, record, nonceExpiresAt);
         return nonce;
     }
 
@@ -46,35 +71,50 @@ public class InMemoryRegistrationStore implements RegistrationStore {
     public boolean confirm(ClientId clientId, Duration validityPeriod, Nonce newNonce) {
         Instant now = Instant.now();
         Instant expiresAt = now.plus(validityPeriod);
-        boolean[] confirmed = {false};
+        Record[] confirmedRecord = new Record[1];
         recordsByClientId.computeIfPresent(clientId, (id, current) -> {
             if (current.registered()) {
                 return current; // already confirmed by a concurrent attempt; leave as-is
             }
-            confirmed[0] = true;
-            return new Record(true, newNonce, null, expiresAt, null, now);
+            Record next = new Record(true, newNonce, null, expiresAt, null, now);
+            confirmedRecord[0] = next;
+            return next;
         });
-        return confirmed[0];
+        if (confirmedRecord[0] == null) {
+            return false;
+        }
+        scheduleEviction(clientId, confirmedRecord[0], expiresAt);
+        return true;
     }
 
     @Override
     public boolean rotateNonce(ClientId clientId, Duration validityPeriod, Nonce newNonce) {
         Instant now = Instant.now();
         Instant expiresAt = now.plus(validityPeriod);
-        boolean[] rotated = {false};
+        Record[] rotatedRecord = new Record[1];
         recordsByClientId.computeIfPresent(clientId, (id, current) -> {
             if (!current.registered()) {
                 return current; // not actually confirmed; leave as-is
             }
-            rotated[0] = true;
-            return new Record(true, newNonce, current.nonce(), expiresAt, null, now);
+            Record next = new Record(true, newNonce, current.nonce(), expiresAt, null, now);
+            rotatedRecord[0] = next;
+            return next;
         });
-        return rotated[0];
+        if (rotatedRecord[0] == null) {
+            return false;
+        }
+        scheduleEviction(clientId, rotatedRecord[0], expiresAt);
+        return true;
     }
 
     @Override
     public boolean remove(ClientId clientId) {
-        return recordsByClientId.remove(clientId) != null;
+        boolean removed = recordsByClientId.remove(clientId) != null;
+        Timeout timeout = evictionsByClientId.remove(clientId);
+        if (timeout != null) {
+            timeout.cancel();
+        }
+        return removed;
     }
 
     @Scheduled(fixedDelayString = "${registration.reaper-interval-millis}")
@@ -82,9 +122,30 @@ public class InMemoryRegistrationStore implements RegistrationStore {
         recordsByClientId.entrySet().removeIf(entry -> isExpired(entry.getValue()));
     }
 
+    /**
+     * Schedules {@code record}'s own eviction at {@code expiresAt} and cancels whatever
+     * timeout previously owned this Client ID. Cancellation here is best-effort housekeeping
+     * only, never a correctness requirement: even if it's skipped or loses a race, a stale
+     * timeout's own compare-and-remove makes firing late harmless (ADR-0016).
+     */
+    private void scheduleEviction(ClientId clientId, Record record, Instant expiresAt) {
+        long delayMillis = Math.max(0, Duration.between(Instant.now(), expiresAt).toMillis());
+        Timeout timeout = timer.newTimeout(fired -> {
+            recordsByClientId.remove(clientId, record);
+            evictionsByClientId.remove(clientId, fired);
+        }, delayMillis, TimeUnit.MILLISECONDS);
+        Timeout previous = evictionsByClientId.put(clientId, timeout);
+        if (previous != null) {
+            previous.cancel();
+        }
+    }
+
     private static boolean isExpired(Record record) {
-        Instant now = Instant.now();
-        return record.registered() ? record.expiresAt().isBefore(now) : record.nonceExpiresAt().isBefore(now);
+        return expiryOf(record).isBefore(Instant.now());
+    }
+
+    private static Instant expiryOf(Record record) {
+        return record.registered() ? record.expiresAt() : record.nonceExpiresAt();
     }
 
     private record Record(

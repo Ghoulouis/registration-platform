@@ -14,6 +14,7 @@ import com.registration.common.protocol.StatusCode;
 import com.registration.common.protocol.TraceContext;
 import com.registration.server.config.RegistrationProperties;
 import com.registration.server.store.InMemoryRegistrationStore;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -29,6 +30,7 @@ class RegistrationServiceTest {
     private static final String PRIVATE_SEED_B64 = "pU55QBNBWdgYnCyCaZsfU3jImcyqZKGmSv3Nb+YEEbM=";
     private static final String PUBLIC_KEY_B64 = "OyqZa3x46M9IqazQAsypDYZr244z47nMSQVPmoK7Kcw=";
 
+    private InMemoryRegistrationStore store;
     private RegistrationService service;
     private PrivateKey signingKey;
 
@@ -36,8 +38,14 @@ class RegistrationServiceTest {
     void setUp() {
         RegistrationProperties properties =
                 new RegistrationProperties(0, VALIDITY_PERIOD_SECONDS, 1000, 30, PUBLIC_KEY_B64);
-        service = new RegistrationService(new InMemoryRegistrationStore(), properties);
+        store = new InMemoryRegistrationStore(100);
+        service = new RegistrationService(store, properties);
         signingKey = Ed25519.parsePrivateKey(PRIVATE_SEED_B64);
+    }
+
+    @AfterEach
+    void tearDown() {
+        store.shutdown();
     }
 
     @Test

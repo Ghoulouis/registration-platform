@@ -45,6 +45,7 @@ class TcpServerTest {
     private static final String PUBLIC_KEY_B64 = "OyqZa3x46M9IqazQAsypDYZr244z47nMSQVPmoK7Kcw=";
 
     private RegistrationProperties properties;
+    private InMemoryRegistrationStore store;
     private TcpServer server;
     private PrivateKey signingKey;
 
@@ -52,7 +53,8 @@ class TcpServerTest {
     void startServer() throws IOException {
         int port = findFreePort();
         properties = new RegistrationProperties(port, VALIDITY_PERIOD_SECONDS, 1000, 30, PUBLIC_KEY_B64);
-        RegistrationService registrationService = new RegistrationService(new InMemoryRegistrationStore(), properties);
+        store = new InMemoryRegistrationStore(100);
+        RegistrationService registrationService = new RegistrationService(store, properties);
         server = new TcpServer(properties, registrationService);
         server.start();
         signingKey = Ed25519.parsePrivateKey(PRIVATE_SEED_B64);
@@ -61,6 +63,7 @@ class TcpServerTest {
     @AfterEach
     void stopServer() {
         server.stop();
+        store.shutdown();
     }
 
     @Test
