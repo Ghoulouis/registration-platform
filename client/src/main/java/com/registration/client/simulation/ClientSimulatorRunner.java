@@ -57,7 +57,7 @@ public class ClientSimulatorRunner implements ApplicationRunner {
             Runtime.getRuntime().removeShutdownHook(shutdownHook);
             shutdown(threads, stats, true);
         } else {
-            threads.get(0).join();
+            threads.getFirst().join();
         }
     }
 

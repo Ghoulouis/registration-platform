@@ -8,5 +8,5 @@ logging:
 
 registration:
   tcp-port: 9000
-  validity-period-seconds: 20
-  reaper-interval-millis: 60 * 60 * 1000 # 1 hour
+  validity-period-seconds: 10
+  reaper-interval-millis: 3600000 # 1 hour

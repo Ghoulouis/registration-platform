@@ -39,7 +39,7 @@ public class InMemoryRegistrationStore implements RegistrationStore {
     private final Timer timer;
 
     public InMemoryRegistrationStore(
-            @Value("${registration.timer-tick-duration-millis:100}") long timerTickDurationMillis) {
+            @Value("${registration.timer-tick-duration-millis:1000}") long timerTickDurationMillis) {
         this.timer = new HashedWheelTimer(timerTickDurationMillis, TimeUnit.MILLISECONDS);
     }
 
