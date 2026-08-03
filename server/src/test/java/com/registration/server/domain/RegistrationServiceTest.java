@@ -145,6 +145,10 @@ class RegistrationServiceTest {
 
         assertThat(graceResponse.status()).isEqualTo(StatusCode.SUCCESS);
         assertThat(graceResponse.nonce()).isEqualTo(rotatedNonce);
+        // No rotation happens on this retry, so validityPeriodSeconds must reflect the actual
+        // remaining time from the earlier rotation, not a fresh full period - some time has
+        // necessarily elapsed since that rotation, so this is strictly less, never equal.
+        assertThat(graceResponse.validityPeriodSeconds()).isLessThan(VALIDITY_PERIOD_SECONDS);
 
         // A real Renewal with the actual current Nonce still works afterward.
         RenewResponse realResponse = renew(clientId, rotatedNonce);

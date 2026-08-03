@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <!-- Reuses Spring Boot's own CONSOLE appender + logging.pattern.console property (kept
+         as-is, ADR-0018) so introducing this file doesn't change local console output. -->
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+    <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
+
+    <!-- Ships every event as OTLP via the OpenTelemetry instance OtelLogging installs
+         (ADR-0018). captureKeyValuePairAttributes carries RegistrationEventLog's structured
+         clientId/transaction/eventType/result fields through as Log Record Attributes. -->
+    <appender name="OTEL" class="io.opentelemetry.instrumentation.logback.appender.v1_0.OpenTelemetryAppender">
+        <captureKeyValuePairAttributes>true</captureKeyValuePairAttributes>
+    </appender>
+
+    <logger name="com.registration.server" level="TRACE"/>
+    <!-- RegistrationEventLog lives in common (com.registration.common.observability), not
+         com.registration.server - needs its own override or it inherits root's INFO threshold
+         and any TRACE/DEBUG call is dropped before reaching CONSOLE or OTEL. -->
+    <logger name="com.registration.common" level="TRACE"/>
+    <logger name="org.springframework" level="INFO"/>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="OTEL"/>
+    </root>
+</configuration>

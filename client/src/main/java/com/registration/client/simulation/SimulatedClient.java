@@ -3,6 +3,7 @@ package com.registration.client.simulation;
 import com.registration.client.retry.CallFailedException;
 import com.registration.client.retry.RetryingRequester;
 import com.registration.common.crypto.Ed25519;
+import com.registration.common.observability.RegistrationEventLog;
 import com.registration.common.protocol.CancelResponse;
 import com.registration.common.protocol.ClientId;
 import com.registration.common.protocol.Nonce;
@@ -11,8 +12,12 @@ import com.registration.common.protocol.RegisterResponse;
 import com.registration.common.protocol.RenewResponse;
 import com.registration.common.protocol.StatusCode;
 import com.registration.common.protocol.TraceContext;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.SpanContext;
+import io.opentelemetry.api.trace.TraceFlags;
+import io.opentelemetry.api.trace.TraceState;
+import io.opentelemetry.context.Context;
+import io.opentelemetry.context.Scope;
 import org.slf4j.MDC;
 
 import java.security.PrivateKey;
@@ -34,8 +39,6 @@ import java.util.concurrent.ThreadLocalRandom;
  */
 public final class SimulatedClient implements Runnable {
 
-    private static final Logger log = LoggerFactory.getLogger(SimulatedClient.class);
-
     private final ClientId clientId;
     private final RetryingRequester requester;
     private final PrivateKey signingKey;
@@ -46,6 +49,10 @@ public final class SimulatedClient implements Runnable {
     // Set from Register's response, updated after every successful Renewal (ADR-0010).
     // Touched only by this Simulated Client's own thread - no synchronization needed.
     private Nonce currentNonce;
+
+    // The OTel Context scope opened by putTraceContext, closed by clearTraceContext (ADR-0018)
+    // - one push/pop per transaction, matching MDC's own put/remove bracket exactly.
+    private Scope traceScope;
 
     public SimulatedClient(
             ClientId clientId,
@@ -95,18 +102,17 @@ public final class SimulatedClient implements Runnable {
             RegisterResponse response = requester.register(clientId, signingKey, trace);
             if (response.status() == StatusCode.SUCCESS) {
                 currentNonce = response.nonce();
-                log.debug("[{}] REGISTER success -> SUCCESS (validity period {}s)", clientId, response.validityPeriodSeconds());
+                RegistrationEventLog.log(clientId, "REGISTER", "register_success", RegistrationEventLog.Level.INFO);
                 return response.validityPeriodSeconds();
             }
             if (response.status() == StatusCode.ALREADY_REGISTERED) {
                 currentNonce = response.nonce();
-                log.info("[{}] REGISTER already_registered -> REJECTED (proceeding as registered, "
-                        + "assumed validity period {}s)", clientId, assumedValidityPeriodSeconds);
+                RegistrationEventLog.log(clientId, "REGISTER", "already_registered", RegistrationEventLog.Level.INFO);
                 return assumedValidityPeriodSeconds;
             }
             throw new CallFailedException("REGISTER challenge rejected");
         } catch (CallFailedException e) {
-            log.debug("[{}] REGISTER failed -> REJECTED: {}", clientId, e.getMessage());
+            RegistrationEventLog.log(clientId, "REGISTER", "call_failed", RegistrationEventLog.Level.WARN);
             throw e;
         } finally {
             clearTraceContext();
@@ -128,10 +134,10 @@ public final class SimulatedClient implements Runnable {
                 throw new RenewalFailedException("Server returned " + response.status());
             }
             currentNonce = response.nonce();
-            log.debug("[{}] RENEW success -> SUCCESS (validity period {}s)", clientId, response.validityPeriodSeconds());
+            RegistrationEventLog.log(clientId, "RENEW", "renew_success", RegistrationEventLog.Level.INFO);
             return response.validityPeriodSeconds();
         } catch (RenewalFailedException e) {
-            log.debug("[{}] RENEW failed -> REJECTED: {}", clientId, e.getMessage());
+            RegistrationEventLog.log(clientId, "RENEW", "call_failed", RegistrationEventLog.Level.WARN);
             throw e;
         } finally {
             clearTraceContext();
@@ -144,10 +150,15 @@ public final class SimulatedClient implements Runnable {
         try {
             NonceSignature signature = Ed25519.sign(signingKey, currentNonce);
             CancelResponse response = requester.cancel(clientId, signature, trace);
-            String result = response.status() == StatusCode.SUCCESS ? "SUCCESS" : "REJECTED";
-            log.info("[{}] CANCEL {} -> {}", clientId, response.status().name().toLowerCase(), result);
+
+            if (response.status() == StatusCode.SUCCESS) {
+                RegistrationEventLog.log( clientId, "CANCEL", "cancel_success", RegistrationEventLog.Level.INFO);
+            } else {
+                RegistrationEventLog.log( clientId, "CANCEL", "cancel_failed", RegistrationEventLog.Level.WARN);
+            }
+
         } catch (CallFailedException e) {
-            log.debug("[{}] CANCEL failed -> REJECTED (best-effort during shutdown): {}", clientId, e.getMessage());
+            RegistrationEventLog.log(clientId, "CANCEL", "call_failed", RegistrationEventLog.Level.WARN);
         } catch (InterruptedException e) {
             // already shutting down; nothing more to do
         } finally {
@@ -162,13 +173,23 @@ public final class SimulatedClient implements Runnable {
         return (long) (validityPeriodSeconds * 1000L * fraction);
     }
 
-    private static void putTraceContext(TraceContext trace) {
+    private void putTraceContext(TraceContext trace) {
         HexFormat hex = HexFormat.of();
-        MDC.put("traceId", hex.formatHex(trace.traceId()));
-        MDC.put("spanId", hex.formatHex(trace.spanId()));
+        String traceId = hex.formatHex(trace.traceId());
+        String spanId = hex.formatHex(trace.spanId());
+        MDC.put("traceId", traceId);
+        MDC.put("spanId", spanId);
+
+        // Wraps ADR-0012's own Trace ID/Span ID as a real (non-recording) OTel Span so the
+        // Log Data Model's trace_id/span_id fields populate via the SDK's normal mechanism
+        // (ADR-0018) - no span is ever recorded or exported, this is log correlation only.
+        SpanContext spanContext = SpanContext.create(traceId, spanId, TraceFlags.getSampled(), TraceState.getDefault());
+        traceScope = Span.wrap(spanContext).storeInContext(Context.current()).makeCurrent();
     }
 
-    private static void clearTraceContext() {
+    private void clearTraceContext() {
+        traceScope.close();
+        traceScope = null;
         MDC.remove("traceId");
         MDC.remove("spanId");
     }

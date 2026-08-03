@@ -1,0 +1,60 @@
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /tmp/loki
+  storage:
+    filesystem:
+      chunks_directory: /tmp/loki/chunks
+      rules_directory: /tmp/loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+query_range:
+  results_cache:
+    cache:
+      embedded_cache:
+        enabled: true
+        max_size_mb: 100
+
+schema_config:
+  configs:
+    - from: 2020-10-24
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+pattern_ingester:
+  enabled: true
+  metric_aggregation:
+    loki_address: localhost:3100
+
+ruler:
+  alertmanager_url: http://localhost:9093
+
+frontend:
+  encoding: protobuf
+
+# service.name is an index label by Loki's own OTLP default (ADR-0018); severity and the
+# collector-promoted "transaction"/"eventType" resource attributes are added here. eventType
+# is a small, fixed vocabulary (nonce_issued, auth_success, invalid_signature, ...) - unlike
+# clientId, labeling it doesn't risk the stream-cardinality blowup ADR-0018 was guarding against.
+limits_config:
+  allow_structured_metadata: true
+  otlp_config:
+    severity_text_as_label: true
+    resource_attributes:
+      attributes_config:
+        - action: index_label
+          attributes:
+            - transaction
+            - eventType

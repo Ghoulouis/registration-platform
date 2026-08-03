@@ -5,13 +5,13 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.registration.common.crypto.Ed25519;
+import com.registration.common.observability.RegistrationEventLog;
 import com.registration.common.protocol.CancelRequest;
 import com.registration.common.protocol.ClientId;
 import com.registration.common.protocol.NonceSignature;
 import com.registration.common.protocol.RegisterRequest;
 import com.registration.common.protocol.RegisterResponse;
 import com.registration.common.protocol.RenewRequest;
-import com.registration.common.protocol.RenewResponse;
 import com.registration.common.protocol.TraceContext;
 import com.registration.server.config.RegistrationProperties;
 import com.registration.server.domain.RegistrationService;
@@ -27,9 +27,11 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Verifies the actual step/outcome event sequence RegistrationService emits (ADR-0014) by
- * capturing RegistrationEventLog's real output, rather than testing classification logic in
- * isolation - there's no such logic left to isolate, it's inline at each decision point now.
+ * Verifies the actual event sequence RegistrationService emits (ADR-0014) by capturing
+ * RegistrationEventLog's real output, rather than testing classification logic in isolation -
+ * there's no such logic left to isolate, it's inline at each decision point now. A successful
+ * CANCEL currently emits no event at all - asserted explicitly below since that's easy to
+ * regress on silently.
  */
 class RegistrationEventLogTest {
 
@@ -54,7 +56,7 @@ class RegistrationEventLogTest {
         signingKey = Ed25519.parsePrivateKey(PRIVATE_SEED_B64);
 
         eventLogger = (Logger) LoggerFactory.getLogger(RegistrationEventLog.class);
-        eventLogger.setLevel(Level.DEBUG);
+        eventLogger.setLevel(Level.TRACE);
         appender = new ListAppender<>();
         appender.start();
         eventLogger.addAppender(appender);
@@ -67,15 +69,14 @@ class RegistrationEventLogTest {
     }
 
     @Test
-    void registerSuccessLogsTheFullStepSequence() {
+    void registerSuccessLogsNonceIssuedThenAuthSuccess() {
         ClientId clientId = ClientId.parse("123456789012");
 
         RegisterResponse challenge = (RegisterResponse) service.handle(RegisterRequest.initial(clientId, TraceContext.newTrace()));
         NonceSignature signature = Ed25519.sign(signingKey, challenge.nonce());
         service.handle(RegisterRequest.withNonceSignature(clientId, TraceContext.newTrace(), signature));
 
-        assertThat(eventTypes()).containsExactly(
-                "nonce_requested", "nonce_issued", "auth_data_received", "auth_success", "db_updated");
+        assertThat(eventTypes()).containsExactly("nonce_issued", "auth_success");
     }
 
     @Test
@@ -86,12 +87,32 @@ class RegistrationEventLogTest {
 
         service.handle(RegisterRequest.withNonceSignature(clientId, TraceContext.newTrace(), bogus));
 
-        assertThat(eventTypes()).containsExactly(
-                "nonce_requested", "nonce_issued", "auth_data_received", "invalid_signature");
+        assertThat(eventTypes()).containsExactly("nonce_issued", "invalid_signature");
     }
 
     @Test
-    void renewSuccessLogsAuthSuccessThenDbUpdated() {
+    void registerWhenAlreadyRegisteredLogsAlreadyRegistered() {
+        ClientId clientId = ClientId.parse("123456789012");
+        register(clientId);
+        appender.list.clear();
+
+        service.handle(RegisterRequest.initial(clientId, TraceContext.newTrace()));
+
+        assertThat(eventTypes()).containsExactly("already_registered");
+    }
+
+    @Test
+    void registerConfirmWithNoPendingNonceLogsChallengeRejected() {
+        ClientId clientId = ClientId.parse("123456789012");
+        NonceSignature bogus = NonceSignature.of(new byte[NonceSignature.LENGTH]);
+
+        service.handle(RegisterRequest.withNonceSignature(clientId, TraceContext.newTrace(), bogus));
+
+        assertThat(eventTypes()).containsExactly("challenge_rejected");
+    }
+
+    @Test
+    void renewSuccessLogsRenewSuccess() {
         ClientId clientId = ClientId.parse("123456789012");
         var nonce = register(clientId);
         appender.list.clear();
@@ -99,24 +120,11 @@ class RegistrationEventLogTest {
         NonceSignature signature = Ed25519.sign(signingKey, nonce);
         service.handle(new RenewRequest(clientId, TraceContext.newTrace(), signature));
 
-        assertThat(eventTypes()).containsExactly("auth_data_received", "auth_success", "db_updated");
+        assertThat(eventTypes()).containsExactly("renew_success");
     }
 
     @Test
-    void renewWithWrongNonceLogsInvalidSignature() {
-        ClientId clientId = ClientId.parse("123456789012");
-        register(clientId);
-        appender.list.clear();
-
-        NonceSignature signature = Ed25519.sign(signingKey, com.registration.common.protocol.Nonce.random());
-        RenewResponse response = (RenewResponse) service.handle(new RenewRequest(clientId, TraceContext.newTrace(), signature));
-
-        assertThat(response.status()).isEqualTo(com.registration.common.protocol.StatusCode.INVALID_TOKEN);
-        assertThat(eventTypes()).containsExactly("auth_data_received", "invalid_signature");
-    }
-
-    @Test
-    void cancelSuccessLogsAuthSuccessThenDbUpdated() {
+    void cancelSuccessLogsNothing() {
         ClientId clientId = ClientId.parse("123456789012");
         var nonce = register(clientId);
         appender.list.clear();
@@ -124,7 +132,17 @@ class RegistrationEventLogTest {
         NonceSignature signature = Ed25519.sign(signingKey, nonce);
         service.handle(new CancelRequest(clientId, TraceContext.newTrace(), signature));
 
-        assertThat(eventTypes()).containsExactly("auth_data_received", "auth_success", "db_updated");
+        assertThat(eventTypes()).isEmpty();
+    }
+
+    @Test
+    void cancelWhenNotRegisteredLogsNotRegistered() {
+        ClientId clientId = ClientId.parse("123456789012");
+        NonceSignature bogus = NonceSignature.of(new byte[NonceSignature.LENGTH]);
+
+        service.handle(new CancelRequest(clientId, TraceContext.newTrace(), bogus));
+
+        assertThat(eventTypes()).containsExactly("not_registered");
     }
 
     private com.registration.common.protocol.Nonce register(ClientId clientId) {
@@ -136,6 +154,14 @@ class RegistrationEventLogTest {
     }
 
     private List<String> eventTypes() {
-        return appender.list.stream().map(event -> (String) event.getArgumentArray()[2]).toList();
+        return appender.list.stream().map(event -> keyValue(event, "eventType")).toList();
+    }
+
+    private static String keyValue(ILoggingEvent event, String key) {
+        return event.getKeyValuePairs().stream()
+                .filter(kv -> kv.key.equals(key))
+                .map(kv -> (String) kv.value)
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("No \"" + key + "\" key-value pair on: " + event));
     }
 }

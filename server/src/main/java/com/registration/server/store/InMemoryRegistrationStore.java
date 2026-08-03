@@ -60,7 +60,7 @@ public class InMemoryRegistrationStore implements RegistrationStore {
         if (record == null || isExpired(record)) {
             return null;
         }
-        return new ClientRecord(record.registered(), record.nonce(), record.previousNonce());
+        return new ClientRecord(record.registered(), record.nonce(), record.previousNonce(), record.expiresAt());
     }
 
     @Override

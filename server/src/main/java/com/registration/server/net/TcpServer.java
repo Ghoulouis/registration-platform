@@ -10,6 +10,12 @@ import com.registration.common.protocol.RenewRequest;
 import com.registration.common.protocol.TraceContext;
 import com.registration.server.config.RegistrationProperties;
 import com.registration.server.domain.RegistrationService;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.SpanContext;
+import io.opentelemetry.api.trace.TraceFlags;
+import io.opentelemetry.api.trace.TraceState;
+import io.opentelemetry.context.Context;
+import io.opentelemetry.context.Scope;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -159,9 +165,16 @@ public class TcpServer implements SmartLifecycle {
             return registrationService.handle(request);
         }
         HexFormat hex = HexFormat.of();
-        MDC.put("traceId", hex.formatHex(trace.traceId()));
-        MDC.put("spanId", hex.formatHex(trace.spanId()));
-        try {
+        String traceId = hex.formatHex(trace.traceId());
+        String spanId = hex.formatHex(trace.spanId());
+        MDC.put("traceId", traceId);
+        MDC.put("spanId", spanId);
+
+        // Wraps ADR-0012's own Trace ID/Span ID as a real (non-recording) OTel Span so the
+        // Log Data Model's trace_id/span_id fields populate via the SDK's normal mechanism
+        // (ADR-0018) - no span is ever recorded or exported, this is log correlation only.
+        SpanContext spanContext = SpanContext.create(traceId, spanId, TraceFlags.getSampled(), TraceState.getDefault());
+        try (Scope scope = Span.wrap(spanContext).storeInContext(Context.current()).makeCurrent()) {
             return registrationService.handle(request);
         } finally {
             MDC.remove("traceId");

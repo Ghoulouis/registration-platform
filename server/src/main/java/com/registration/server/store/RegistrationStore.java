@@ -64,8 +64,10 @@ public interface RegistrationStore {
      * @param registered PENDING (false) vs CONFIRMED (true) — not "currently live"; liveness is
      *                    the store's job to check before ever returning a record (ADR-0011).
      * @param previousNonce only ever non-null once CONFIRMED and rotated at least once.
+     * @param expiresAt the Registration's actual expiry; only meaningful once {@code registered}
+     *                  — {@code null} for a PENDING-only record.
      */
-    record ClientRecord(boolean registered, Nonce nonce, Nonce previousNonce) {
+    record ClientRecord(boolean registered, Nonce nonce, Nonce previousNonce, Instant expiresAt) {
     }
 
     /** One entry in {@link #listConfirmed} — deliberately excludes the Nonce (ADR-0017). */

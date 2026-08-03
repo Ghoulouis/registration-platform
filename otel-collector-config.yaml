@@ -1,0 +1,37 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch: {}
+  # Loki's native OTLP ingestion only allows Resource Attributes to become index
+  # labels (Log Attributes can only become Structured Metadata or be dropped) - so
+  # "transaction" is promoted here before export, letting Loki's own otlp_config
+  # (loki-config.yaml) turn it into a real index label alongside service.name (ADR-0018).
+  transform/promote_transaction_label:
+    error_mode: ignore
+    log_statements:
+      - context: log
+        statements:
+          - set(resource.attributes["transaction"], log.attributes["transaction"]) where log.attributes["transaction"] != nil
+          - set(resource.attributes["eventType"], log.attributes["eventType"]) where log.attributes["eventType"] != nil
+
+exporters:
+  # Loki 3.x ingests OTLP logs natively; there is no separate "loki" exporter component
+  # (removed from collector-contrib once native OTLP ingestion shipped) - the standard
+  # otlphttp exporter, pointed at Loki's /otlp endpoint, is Grafana's documented approach.
+  otlp_http:
+    endpoint: http://loki:3100/otlp
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [transform/promote_transaction_label, batch]
+      exporters: [otlp_http]

@@ -2,6 +2,7 @@ package com.registration.client.simulation;
 
 import com.registration.client.config.ClientProperties;
 import com.registration.client.net.TcpClient;
+import com.registration.client.observability.OtelLogging;
 import com.registration.client.retry.RetryingRequester;
 import com.registration.client.stats.Stats;
 import com.registration.common.crypto.Ed25519;
@@ -34,9 +35,11 @@ public class ClientSimulatorRunner implements ApplicationRunner {
     private static final Duration SHUTDOWN_JOIN_TIMEOUT = Duration.ofSeconds(5);
 
     private final ClientProperties properties;
+    private final OtelLogging otelLogging;
 
-    public ClientSimulatorRunner(ClientProperties properties) {
+    public ClientSimulatorRunner(ClientProperties properties, OtelLogging otelLogging) {
         this.properties = properties;
+        this.otelLogging = otelLogging;
     }
 
     @Override
@@ -106,6 +109,10 @@ public class ClientSimulatorRunner implements ApplicationRunner {
         if (benchmarkMode) {
             log.info("Final statistics:\n{}", stats.report());
         }
+        // Flush buffered OTLP logs (ADR-0018) only after every Simulated Client's final
+        // CANCEL is logged - guaranteed ordering that @PreDestroy alone can't give here,
+        // since it runs on Spring's own independent shutdown hook.
+        otelLogging.shutdown();
     }
 
     private static void joinQuietly(Thread thread, Duration timeout) {

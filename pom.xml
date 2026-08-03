@@ -28,6 +28,22 @@
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!-- opentelemetry-logback-appender-1.0 (a separate instrumentation-project version
+             line from the SDK's own) is pinned against this exact opentelemetry-api version. -->
+        <opentelemetry.version>1.64.0</opentelemetry.version>
+        <opentelemetry-logback-appender.version>2.30.0-alpha</opentelemetry-logback-appender.version>
     </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>io.opentelemetry</groupId>
+                <artifactId>opentelemetry-bom</artifactId>
+                <version>${opentelemetry.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
 </project>

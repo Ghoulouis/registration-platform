@@ -5,6 +5,7 @@ import com.registration.client.stats.OperationStats;
 import com.registration.client.stats.OperationType;
 import com.registration.client.stats.Stats;
 import com.registration.common.crypto.Ed25519;
+import com.registration.common.observability.RegistrationEventLog;
 import com.registration.common.protocol.CancelRequest;
 import com.registration.common.protocol.CancelResponse;
 import com.registration.common.protocol.ClientId;
@@ -15,8 +16,6 @@ import com.registration.common.protocol.RenewRequest;
 import com.registration.common.protocol.RenewResponse;
 import com.registration.common.protocol.StatusCode;
 import com.registration.common.protocol.TraceContext;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 
 import java.io.IOException;
@@ -25,6 +24,8 @@ import java.security.PrivateKey;
 import java.time.Duration;
 import java.util.HexFormat;
 import java.util.concurrent.ThreadLocalRandom;
+
+import static com.registration.common.observability.RegistrationEventLog.Level.TRACE;
 
 /**
  * Wraps every REGISTER/RENEW/CANCEL attempt with exponential backoff + jitter (grilled
@@ -36,8 +37,6 @@ import java.util.concurrent.ThreadLocalRandom;
  * connection attempt (each retry, and Register's second leg) within the Trace it's given.
  */
 public final class RetryingRequester {
-
-    private static final Logger log = LoggerFactory.getLogger(RetryingRequester.class);
 
     private final TcpClient tcpClient;
     private final int maxRetries;
@@ -91,7 +90,7 @@ public final class RetryingRequester {
 
     private RegisterResponse attemptRegister(ClientId clientId, PrivateKey signingKey, TraceContext trace)
             throws IOException {
-        log.debug("[{}] REGISTER requesting_nonce", clientId);
+        RegistrationEventLog.log(clientId, "REGISTER", "requesting_nonce", TRACE);
         RegisterResponse initial = (RegisterResponse) tcpClient.send(RegisterRequest.initial(clientId, trace));
         if (initial.status() != StatusCode.CHALLENGE) {
             return initial; // ALREADY_REGISTERED: nothing to sign, no second leg
@@ -100,7 +99,7 @@ public final class RetryingRequester {
         // Step 2 is a separate connection attempt - its own Span ID, same Trace (ADR-0012).
         TraceContext confirmSpan = trace.newSpan();
         putSpanId(confirmSpan);
-        log.debug("[{}] REGISTER submitting_auth_data", clientId);
+        RegistrationEventLog.log(clientId, "REGISTER", "submitting_auth_data", TRACE);
         return (RegisterResponse) tcpClient.send(RegisterRequest.withNonceSignature(clientId, confirmSpan, signature));
     }
 
