@@ -117,7 +117,7 @@ public class InMemoryRegistrationStore implements RegistrationStore {
         return removed;
     }
 
-    @Scheduled(fixedDelayString = "${registration.reaper-interval-millis}")
+    @Scheduled(fixedDelayString = "${registration.reaper-interval-millis:300000}")
     void reapExpired() {
         recordsByClientId.entrySet().removeIf(entry -> isExpired(entry.getValue()));
     }

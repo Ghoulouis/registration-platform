@@ -9,7 +9,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  */
 @ConfigurationProperties(prefix = "registration")
 public record RegistrationProperties(
-        @DefaultValue("9001") int tcpPort,
+        @DefaultValue("9000") int tcpPort,
         @DefaultValue("60") int validityPeriodSeconds,
         @DefaultValue("300000") long reaperIntervalMillis,
         @DefaultValue("30") int pendingNonceTtlSeconds,

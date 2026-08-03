@@ -1,0 +1,12 @@
+spring:
+  application:
+    name: server
+
+logging:
+  pattern:
+    console: "%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %5p [traceId=%X{traceId:-},spanId=%X{spanId:-}] %-40.40logger{39} : %m%n"
+
+registration:
+  tcp-port: 9000
+  validity-period-seconds: 20
+  reaper-interval-millis: 60 * 60 * 1000 # 1 hour
