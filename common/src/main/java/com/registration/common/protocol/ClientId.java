@@ -8,7 +8,7 @@ import java.util.concurrent.ThreadLocalRandom;
  * long on the wire (see ADR-0003). {@link #toString()} zero-pads back to 12 digits,
  * so no information is lost round-tripping through {@link #rawValue()}.
  */
-public final class ClientId {
+public final class ClientId implements Comparable<ClientId> {
 
     private static final int DIGIT_COUNT = 12;
     private static final long MAX_VALUE = 999_999_999_999L;
@@ -57,5 +57,10 @@ public final class ClientId {
     @Override
     public int hashCode() {
         return Long.hashCode(value);
+    }
+
+    @Override
+    public int compareTo(ClientId o) {
+        return Long.compare(this.value, o.rawValue());
     }
 }

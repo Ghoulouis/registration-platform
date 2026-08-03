@@ -4,6 +4,8 @@ import com.registration.common.protocol.ClientId;
 import com.registration.common.protocol.Nonce;
 
 import java.time.Duration;
+import java.time.Instant;
+import java.util.List;
 
 /**
  * One record per Client ID, spanning both lifecycle phases (ADR-0011): PENDING (a Nonce was
@@ -45,10 +47,28 @@ public interface RegistrationStore {
     boolean remove(ClientId clientId);
 
     /**
+     * A page of live CONFIRMED Registrations (ADR-0017) — best-effort, not a stable listing:
+     * paged directly over the store's current iteration order with no sort and no snapshot, so
+     * a concurrent Register/Renew/Cancel/Expiration during pagination can skip or duplicate
+     * entries across pages. Not for anything requiring an exhaustive or reproducible result.
+     *
+     * @param page zero-based page index
+     * @param limit max entries to return
+     */
+    List<RegisteredClient> listConfirmed(int page, int limit);
+
+    /** Count of currently live CONFIRMED Registrations, subject to the same best-effort caveat as {@link #listConfirmed}. */
+    long countConfirmed();
+
+    /**
      * @param registered PENDING (false) vs CONFIRMED (true) — not "currently live"; liveness is
      *                    the store's job to check before ever returning a record (ADR-0011).
      * @param previousNonce only ever non-null once CONFIRMED and rotated at least once.
      */
     record ClientRecord(boolean registered, Nonce nonce, Nonce previousNonce) {
+    }
+
+    /** One entry in {@link #listConfirmed} — deliberately excludes the Nonce (ADR-0017). */
+    record RegisteredClient(ClientId clientId, Instant expiresAt) {
     }
 }

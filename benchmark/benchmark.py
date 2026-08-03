@@ -17,9 +17,9 @@ import matplotlib.pyplot as plt
 # Resource Profile (ADR-0008): hard CPU/RAM cap per process, enforced by Docker.
 # Script config, not a CLI flag -- edit here to test a different envelope.
 SERVER_CPUS = 2.0
-SERVER_MEMORY_MB = 512
+SERVER_MEMORY_MB = 256
 CLIENT_CPUS = 4.0
-CLIENT_MEMORY_MB = 8192
+CLIENT_MEMORY_MB = 256
 
 SERVER_IMAGE = "registration-server:latest"
 CLIENT_IMAGE = "registration-client:latest"
@@ -27,7 +27,7 @@ NETWORK_NAME = "registration-benchmark-net"
 SERVER_CONTAINER_NAME = "registration-benchmark-server"
 CLIENT_CONTAINER_NAME = "registration-benchmark-client"
 SERVER_PORT = 9000
-
+SERVER_HTTP_PORT = 8080
 IDLE_WAIT_SECONDS = 5
 COOLDOWN_WAIT_SECONDS = 5
 
@@ -170,7 +170,10 @@ def run_benchmark(args) -> Path:
             nano_cpus=int(SERVER_CPUS * 1_000_000_000),
             mem_limit=f"{SERVER_MEMORY_MB}m",
             environment={"JAVA_OPTS": java_opts(SERVER_CPUS, SERVER_MEMORY_MB)},
-            ports={f"{SERVER_PORT}/tcp": SERVER_PORT},
+            ports={
+                f"{SERVER_PORT}/tcp": SERVER_PORT,
+                f"{SERVER_HTTP_PORT}/tcp": SERVER_HTTP_PORT
+            },
         )
 
         print(f"--> Idle phase ({IDLE_WAIT_SECONDS}s)...")
@@ -290,7 +293,8 @@ def generate_report(args, idle_samples, active_server_samples, active_client_sam
             " BENCHMARK REPORT ".center(45, "="),
             "=" * 45,
             f"Load Profile     : {args.clients} clients | {args.rate}/s | {args.duration}s",
-            f"Resource Profile : {SERVER_CPUS} CPU / {SERVER_MEMORY_MB}MB (each process)",
+            f"Resource Server Profile : {SERVER_CPUS} CPU / {SERVER_MEMORY_MB}MB",
+            f"Resource Server Profile : {CLIENT_CPUS} CPU / {SERVER_MEMORY_MB}MB",
             "-" * 45,
             f"Server Idle      : CPU {idle_cpu:>5.1f}% | RAM {idle_mem:>7.1f} MB",
             f"Server Active    : CPU {active_server_cpu:>5.1f}% | RAM {active_server_mem:>7.1f} MB",

@@ -30,6 +30,18 @@
             <artifactId>spring-boot-starter</artifactId>
         </dependency>
 
+        <!-- Admin listing endpoints only (ADR-0017) — no protocol traffic goes through this. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+            <version>2.5.0</version>
+        </dependency>
+
         <!-- HashedWheelTimer only (ADR-0016) — no Netty transport/handler code. -->
         <dependency>
             <groupId>io.netty</groupId>

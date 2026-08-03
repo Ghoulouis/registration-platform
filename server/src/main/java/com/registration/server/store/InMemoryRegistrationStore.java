@@ -12,8 +12,11 @@ import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -34,7 +37,10 @@ import java.util.concurrent.TimeUnit;
 @Component
 public class InMemoryRegistrationStore implements RegistrationStore {
 
-    private final Map<ClientId, Record> recordsByClientId = new ConcurrentHashMap<>();
+    //private final Map<ClientId, Record> recordsByClientId = new ConcurrentHashMap<>();
+
+    private final ConcurrentSkipListMap<ClientId, Record> recordsByClientId = new ConcurrentSkipListMap<>();
+
     private final Map<ClientId, Timeout> evictionsByClientId = new ConcurrentHashMap<>();
     private final Timer timer;
 
@@ -115,6 +121,29 @@ public class InMemoryRegistrationStore implements RegistrationStore {
             timeout.cancel();
         }
         return removed;
+    }
+
+    @Override
+    public List<RegisteredClient> listConfirmed(int page, int limit) {
+        long skip = (long) page * limit;
+
+        return recordsByClientId.entrySet().stream()
+                // Lọc các record đã registered và chưa hết hạn
+                .filter(entry -> entry.getValue().registered() && !isExpired(entry.getValue()))
+                // Nhảy nhanh qua 'skip' phần tử thỏa mãn điều kiện
+                .skip(skip)
+                // Lấy tối đa 'limit' phần tử
+                .limit(limit)
+                // Biến đổi sang RegisteredClient object
+                .map(entry -> new RegisteredClient(entry.getKey(), entry.getValue().expiresAt()))
+                .toList();
+    }
+
+    @Override
+    public long countConfirmed() {
+        return recordsByClientId.values().stream()
+                .filter(record -> record.registered() && !isExpired(record))
+                .count();
     }
 
     @Scheduled(fixedDelayString = "${registration.reaper-interval-millis:300000}")

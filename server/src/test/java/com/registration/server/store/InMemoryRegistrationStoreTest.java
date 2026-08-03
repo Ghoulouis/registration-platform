@@ -6,6 +6,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.time.Instant;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -13,6 +15,7 @@ import static org.awaitility.Awaitility.await;
 class InMemoryRegistrationStoreTest {
 
     private static final ClientId CLIENT_ID = ClientId.parse("123456789012");
+    private static final ClientId OTHER_CLIENT_ID = ClientId.parse("987654321098");
 
     // Matches production's default tick (application.yml) so these tests, which sleep only
     // 20ms before invoking reapExpired() manually, exercise the reaper itself rather than
@@ -177,6 +180,46 @@ class InMemoryRegistrationStoreTest {
         } finally {
             fastStore.shutdown();
         }
+    }
+
+    @Test
+    void listConfirmedExcludesPendingAndExpiredRecords() throws InterruptedException {
+        store.issuePendingNonce(CLIENT_ID, Duration.ofSeconds(30)); // PENDING only, excluded
+        store.issuePendingNonce(OTHER_CLIENT_ID, Duration.ofSeconds(30));
+        store.confirm(OTHER_CLIENT_ID, Duration.ofMillis(1), Nonce.random());
+        Thread.sleep(20); // OTHER_CLIENT_ID's Registration is now expired but not yet reaped
+
+        assertThat(store.listConfirmed(0, 10)).isEmpty();
+        assertThat(store.countConfirmed()).isZero();
+    }
+
+    @Test
+    void listConfirmedReturnsLiveRegistrationsWithTheirExpiry() {
+        store.issuePendingNonce(CLIENT_ID, Duration.ofSeconds(30));
+        Instant beforeConfirm = Instant.now();
+        store.confirm(CLIENT_ID, Duration.ofSeconds(60), Nonce.random());
+
+        List<RegistrationStore.RegisteredClient> confirmed = store.listConfirmed(0, 10);
+
+        assertThat(confirmed).hasSize(1);
+        assertThat(confirmed.get(0).clientId()).isEqualTo(CLIENT_ID);
+        assertThat(confirmed.get(0).expiresAt()).isAfter(beforeConfirm.plusSeconds(59));
+        assertThat(store.countConfirmed()).isEqualTo(1);
+    }
+
+    @Test
+    void listConfirmedRespectsPageAndLimit() {
+        for (int i = 0; i < 5; i++) {
+            ClientId clientId = ClientId.parse(String.format("%012d", i));
+            store.issuePendingNonce(clientId, Duration.ofSeconds(30));
+            store.confirm(clientId, Duration.ofSeconds(60), Nonce.random());
+        }
+
+        assertThat(store.countConfirmed()).isEqualTo(5);
+        assertThat(store.listConfirmed(0, 2)).hasSize(2);
+        assertThat(store.listConfirmed(1, 2)).hasSize(2);
+        assertThat(store.listConfirmed(2, 2)).hasSize(1);
+        assertThat(store.listConfirmed(3, 2)).isEmpty();
     }
 
     @Test
