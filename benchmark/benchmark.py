@@ -41,6 +41,9 @@ def parse_args():
     parser.add_argument("--clients", type=int, default=10_000, help="Simulated Client count (Load Profile)")
     parser.add_argument("--rate", type=float, default=1_000.0, help="Register rate per second (Load Profile)")
     parser.add_argument("--duration", type=int, default=60, help="Benchmark Duration in seconds (Load Profile)")
+    parser.add_argument("--renew-min", type=int, default=50, help="Benchmark Duration in seconds (Load Profile)")
+    parser.add_argument("--renew-max", type=int, default=70, help="Benchmark Duration in seconds (Load Profile)")
+
     return parser.parse_args()
 
 
