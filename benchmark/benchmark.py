@@ -18,8 +18,8 @@ import matplotlib.pyplot as plt
 # Script config, not a CLI flag -- edit here to test a different envelope.
 SERVER_CPUS = 2.0
 SERVER_MEMORY_MB = 512
-CLIENT_CPUS = 2.0
-CLIENT_MEMORY_MB = 1024
+CLIENT_CPUS = 4.0
+CLIENT_MEMORY_MB = 8192
 
 SERVER_IMAGE = "registration-server:latest"
 CLIENT_IMAGE = "registration-client:latest"

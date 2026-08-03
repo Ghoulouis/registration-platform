@@ -23,7 +23,7 @@ The Server implementation that runs as a fleet of stateless pod replicas behind 
 _Avoid_: server-distribute (when naming the concept rather than the module)
 
 **Centralized Server**:
-The Server implementation that runs as a single node holding Registration state in local process memory (module `server`, artifact `com.registration.server`). Targets the same 1-million-Client scale as the Distributed Server, but on one node rather than a horizontally-scaled fleet — a single-threaded NIO Selector event loop still multiplexes the connections (ADR-0001 applies to both implementations). Expiration is driven by a dedicated reaper thread that periodically scans for lapsed Registrations, since there's no Redis TTL to rely on.
+The Server implementation that runs as a single node holding Registration state in local process memory (module `server`, artifact `com.registration.server`). Targets the same 1-million-Client scale as the Distributed Server, but on one node rather than a horizontally-scaled fleet — one virtual thread per connection, doing blocking I/O, with requests for the same Client ID serialized by a striped lock (ADR-0015; `server-distribute` still follows ADR-0001's single-threaded NIO reactor, the two implementations no longer share this detail). Expiration is driven by a dedicated reaper thread that periodically scans for lapsed Registrations, since there's no Redis TTL to rely on.
 _Avoid_: server (when naming the concept rather than the module), standalone server
 
 **Registration**:

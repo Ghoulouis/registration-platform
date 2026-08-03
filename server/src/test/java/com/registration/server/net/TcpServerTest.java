@@ -28,6 +28,11 @@ import java.net.ServerSocket;
 import java.nio.ByteBuffer;
 import java.nio.channels.SocketChannel;
 import java.security.PrivateKey;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -121,6 +126,43 @@ class TcpServerTest {
         // The reactor thread must still be alive and serving other connections.
         ClientId clientId = ClientId.parse("666666666666");
         assertThat(register(clientId).status()).isEqualTo(StatusCode.SUCCESS);
+    }
+
+    @Test
+    void manyDifferentClientsCanRegisterConcurrently() throws Exception {
+        int clientCount = 50;
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            List<Future<StatusCode>> futures = new ArrayList<>();
+            for (int i = 0; i < clientCount; i++) {
+                ClientId clientId = ClientId.ofRawValue(700_000_000_000L + i);
+                futures.add(executor.submit(() -> register(clientId).status()));
+            }
+            for (Future<StatusCode> future : futures) {
+                assertThat(future.get(10, TimeUnit.SECONDS)).isEqualTo(StatusCode.SUCCESS);
+            }
+        }
+    }
+
+    @Test
+    void concurrentRenewAttemptsForTheSameClientNeverThrowOrCorruptState() throws Exception {
+        ClientId clientId = ClientId.parse("777777777777");
+        Nonce nonce = register(clientId).nonce();
+        NonceSignature signature = Ed25519.sign(signingKey, nonce);
+
+        int attempts = 20;
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            List<Future<StatusCode>> futures = new ArrayList<>();
+            for (int i = 0; i < attempts; i++) {
+                futures.add(executor.submit(
+                        () -> ((RenewResponse) send(new RenewRequest(clientId, TraceContext.newTrace(), signature))).status()));
+            }
+            // Every concurrent attempt signs the same (soon-stale) Nonce, so at most one is a
+            // real rotation; the rest either hit the grace window (SUCCESS) or land just after
+            // it (INVALID_TOKEN) - the point is none of them throw or hang under real contention.
+            for (Future<StatusCode> future : futures) {
+                assertThat(future.get(10, TimeUnit.SECONDS)).isIn(StatusCode.SUCCESS, StatusCode.INVALID_TOKEN);
+            }
+        }
     }
 
     private RegisterResponse register(ClientId clientId) throws IOException {

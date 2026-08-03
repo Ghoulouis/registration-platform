@@ -1,6 +1,7 @@
 package com.registration.server.net;
 
 import com.registration.common.protocol.CancelRequest;
+import com.registration.common.protocol.ClientId;
 import com.registration.common.protocol.FrameDecoder;
 import com.registration.common.protocol.MessageCodec;
 import com.registration.common.protocol.ProtocolMessage;
@@ -16,25 +17,23 @@ import org.springframework.context.SmartLifecycle;
 import org.springframework.stereotype.Component;
 
 import java.io.Closeable;
+import java.io.EOFException;
 import java.io.IOException;
-import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.nio.ByteBuffer;
-import java.nio.channels.SelectionKey;
-import java.nio.channels.Selector;
-import java.nio.channels.ServerSocketChannel;
-import java.nio.channels.SocketChannel;
 import java.time.Duration;
 import java.util.HexFormat;
-import java.util.Iterator;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
- * Single-threaded NIO Selector event loop (ADR-0001, ADR-0007) — same reactor shape as
- * the Distributed Server, but with no worker pool: {@link RegistrationService} here is
- * backed by an in-memory store with no I/O to await, so REGISTER/RENEW/CANCEL are
- * handled inline, directly on the reactor thread, right after a frame decodes. Being
- * single-threaded also makes the MDC-based Trace Context propagation (ADR-0012) safe: only
- * one request is ever "in flight" on this thread at a time, so there's no risk of one
- * request's traceId/spanId leaking into another's log lines.
+ * One virtual thread per connection, doing plain blocking I/O (ADR-0015, Centralized Server
+ * only — reverses ADR-0001) — same style {@link com.registration.client.net.TcpClient} (not
+ * visible from here, different module) already uses. REGISTER/RENEW/CANCEL for different
+ * Client IDs now genuinely run in parallel across cores, instead of being serialized through
+ * one reactor thread. A {@link StripedLock} keyed by Client ID still serializes the
+ * check-then-act sequences inside {@link RegistrationService} for the *same* Client ID, since
+ * that safety no longer comes for free from single-threading.
  */
 @Component
 public class TcpServer implements SmartLifecycle {
@@ -44,10 +43,10 @@ public class TcpServer implements SmartLifecycle {
 
     private final RegistrationProperties properties;
     private final RegistrationService registrationService;
+    private final StripedLock locks = new StripedLock();
 
-    private Selector selector;
-    private ServerSocketChannel serverChannel;
-    private Thread reactorThread;
+    private ServerSocket serverSocket;
+    private Thread acceptThread;
     private volatile boolean running;
 
     public TcpServer(RegistrationProperties properties, RegistrationService registrationService) {
@@ -58,36 +57,28 @@ public class TcpServer implements SmartLifecycle {
     @Override
     public void start() {
         try {
-            selector = Selector.open();
-            serverChannel = ServerSocketChannel.open();
-            serverChannel.bind(new InetSocketAddress(properties.tcpPort()));
-            serverChannel.configureBlocking(false);
-            serverChannel.register(selector, SelectionKey.OP_ACCEPT);
+            serverSocket = new ServerSocket(properties.tcpPort());
         } catch (IOException e) {
             throw new IllegalStateException("Failed to start TCP server on port " + properties.tcpPort(), e);
         }
 
         running = true;
-        reactorThread = new Thread(this::runEventLoop, "tcp-reactor");
-        reactorThread.start();
+        acceptThread = new Thread(this::acceptLoop, "tcp-accept");
+        acceptThread.start();
         log.info("Registration TCP server (standalone) listening on port {}", properties.tcpPort());
     }
 
     @Override
     public void stop() {
         running = false;
-        if (selector != null) {
-            selector.wakeup();
-        }
-        if (reactorThread != null) {
+        closeQuietly(serverSocket); // unblocks the accept() call in acceptLoop
+        if (acceptThread != null) {
             try {
-                reactorThread.join(Duration.ofSeconds(5).toMillis());
+                acceptThread.join(Duration.ofSeconds(5).toMillis());
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
         }
-        closeQuietly(serverChannel);
-        closeQuietly(selector);
     }
 
     @Override
@@ -95,86 +86,73 @@ public class TcpServer implements SmartLifecycle {
         return running;
     }
 
-    private void runEventLoop() {
+    private void acceptLoop() {
         while (running) {
+            Socket socket;
             try {
-                selector.select();
+                socket = serverSocket.accept();
             } catch (IOException e) {
-                log.error("Selector failed", e);
+                if (running) {
+                    log.error("Accept failed", e);
+                }
                 continue;
             }
+            Thread.ofVirtual().start(() -> handleConnection(socket));
+        }
+    }
 
-            Iterator<SelectionKey> keys = selector.selectedKeys().iterator();
-            while (keys.hasNext()) {
-                SelectionKey key = keys.next();
-                keys.remove();
-                if (!key.isValid()) {
-                    continue;
-                }
-                try {
-                    if (key.isAcceptable()) {
-                        acceptConnection();
-                    } else if (key.isReadable()) {
-                        readFrom(key);
-                    } else if (key.isWritable()) {
-                        writeTo(key);
-                    }
-                } catch (IOException e) {
-                    log.debug("Connection error, closing", e);
-                    closeConnection(key);
-                } catch (RuntimeException e) {
-                    // FrameDecoder/MessageCodec reject malformed input (unknown MessageType,
-                    // an out-of-range or negative payload length, a payload that's the wrong
-                    // shape for its declared type) by throwing unchecked exceptions - isolate
-                    // that to this one connection rather than letting it kill the whole
-                    // single-threaded reactor (ADR-0001) and take every other Client down with it.
-                    log.warn("Malformed frame or protocol error, closing connection", e);
-                    closeConnection(key);
-                }
+    private void handleConnection(Socket socket) {
+        try (socket) {
+            ProtocolMessage request = readRequest(socket);
+            ProtocolMessage response = handleWithLockAndTraceContext(request);
+            writeResponse(socket, response);
+        } catch (IOException e) {
+            log.debug("Connection error, closing", e);
+        } catch (RuntimeException e) {
+            // FrameDecoder/MessageCodec reject malformed input (unknown MessageType, an
+            // out-of-range or negative payload length, a payload that's the wrong shape for
+            // its declared type) by throwing unchecked exceptions - isolate that to this one
+            // connection's own virtual thread rather than anything shared (ADR-0015).
+            log.warn("Malformed frame or protocol error, closing connection", e);
+        }
+    }
+
+    private static ProtocolMessage readRequest(Socket socket) throws IOException {
+        FrameDecoder decoder = new FrameDecoder();
+        byte[] readBuffer = new byte[READ_BUFFER_SIZE];
+        while (!decoder.isComplete()) {
+            int bytesRead = socket.getInputStream().read(readBuffer);
+            if (bytesRead == -1) {
+                throw new EOFException("Connection closed before a full frame was received");
             }
+            decoder.feed(ByteBuffer.wrap(readBuffer, 0, bytesRead));
         }
+        return decoder.decode();
     }
 
-    private void acceptConnection() throws IOException {
-        SocketChannel channel = serverChannel.accept();
-        if (channel == null) {
-            return;
-        }
-        channel.configureBlocking(false);
-        channel.register(selector, SelectionKey.OP_READ, new Connection());
-    }
-
-    private void readFrom(SelectionKey key) throws IOException {
-        SocketChannel channel = (SocketChannel) key.channel();
-        Connection connection = (Connection) key.attachment();
-
-        ByteBuffer readBuffer = ByteBuffer.allocate(READ_BUFFER_SIZE);
-        int bytesRead = channel.read(readBuffer);
-        if (bytesRead == -1) {
-            closeConnection(key);
-            return;
-        }
-        if (bytesRead == 0) {
-            return;
-        }
-
-        readBuffer.flip();
-        connection.frameDecoder.feed(readBuffer);
-
-        if (connection.frameDecoder.isComplete()) {
-            ProtocolMessage request = connection.frameDecoder.decode();
-            ProtocolMessage response = handleWithTraceContext(request);
-            connection.pendingWrite = MessageCodec.encode(response);
-            key.interestOps(SelectionKey.OP_WRITE);
-        }
+    private static void writeResponse(Socket socket, ProtocolMessage response) throws IOException {
+        ByteBuffer frame = MessageCodec.encode(response);
+        socket.getOutputStream().write(frame.array(), frame.arrayOffset() + frame.position(), frame.remaining());
+        socket.getOutputStream().flush();
     }
 
     /**
-     * Puts the request's Trace Context (ADR-0012) into MDC for the duration of handling it,
-     * so any log line produced while working on this request — including every step of the
-     * Registration Event Log {@link RegistrationService} emits internally (ADR-0014) — carries
-     * the same traceId/spanId a Client-side log for the same attempt would.
+     * Locks per Client ID (ADR-0015) around the business logic only — never around socket
+     * I/O, which would stall every other request for the same Client ID for no reason while
+     * blocked on the network — and puts the request's Trace Context (ADR-0012) into MDC for
+     * the same scope, so every Registration Event Log line {@link RegistrationService} emits
+     * (ADR-0014) carries the matching traceId/spanId.
      */
+    private ProtocolMessage handleWithLockAndTraceContext(ProtocolMessage request) {
+        ReentrantLock lock = locks.forClientId(clientIdOf(request));
+        lock.lock();
+        try {
+            return handleWithTraceContext(request);
+        } finally {
+            lock.unlock();
+        }
+    }
+
     private ProtocolMessage handleWithTraceContext(ProtocolMessage request) {
         TraceContext trace = traceContextOf(request);
         if (trace == null) {
@@ -191,6 +169,15 @@ public class TcpServer implements SmartLifecycle {
         }
     }
 
+    private static ClientId clientIdOf(ProtocolMessage request) {
+        return switch (request) {
+            case RegisterRequest r -> r.clientId();
+            case RenewRequest r -> r.clientId();
+            case CancelRequest r -> r.clientId();
+            default -> throw new IllegalArgumentException("Server does not accept " + request.type());
+        };
+    }
+
     private static TraceContext traceContextOf(ProtocolMessage request) {
         return switch (request) {
             case RegisterRequest r -> r.traceContext();
@@ -198,20 +185,6 @@ public class TcpServer implements SmartLifecycle {
             case CancelRequest r -> r.traceContext();
             default -> null;
         };
-    }
-
-    private void writeTo(SelectionKey key) throws IOException {
-        SocketChannel channel = (SocketChannel) key.channel();
-        Connection connection = (Connection) key.attachment();
-        channel.write(connection.pendingWrite);
-        if (!connection.pendingWrite.hasRemaining()) {
-            closeConnection(key);
-        }
-    }
-
-    private void closeConnection(SelectionKey key) {
-        key.cancel();
-        closeQuietly(key.channel());
     }
 
     private static void closeQuietly(Closeable closeable) {
@@ -223,10 +196,5 @@ public class TcpServer implements SmartLifecycle {
         } catch (IOException ignored) {
             // best-effort cleanup
         }
-    }
-
-    private static final class Connection {
-        final FrameDecoder frameDecoder = new FrameDecoder();
-        ByteBuffer pendingWrite;
     }
 }
