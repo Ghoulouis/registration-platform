@@ -1,5 +1,6 @@
 package com.registration.common.protocol;
 
+import java.security.SecureRandom;
 import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.concurrent.ThreadLocalRandom;
@@ -27,9 +28,11 @@ public final class Nonce {
         return new Nonce(value.clone());
     }
 
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+
     public static Nonce random() {
         byte[] bytes = new byte[LENGTH];
-        ThreadLocalRandom.current().nextBytes(bytes);
+        SECURE_RANDOM.nextBytes(bytes); // CSPRNG an toàn cryptographic
         return new Nonce(bytes);
     }
 

@@ -53,7 +53,7 @@ class TcpServerTest {
     void startServer() throws IOException {
         int port = findFreePort();
         properties = new RegistrationProperties(port, VALIDITY_PERIOD_SECONDS, 1000, 30, PUBLIC_KEY_B64);
-        store = new InMemoryRegistrationStore(100);
+        store = new InMemoryRegistrationStore(100, 512);
         RegistrationService registrationService = new RegistrationService(store, properties);
         server = new TcpServer(properties, registrationService);
         server.start();

@@ -2,21 +2,172 @@
 
 ## Build & Config & Run
 
+### Test & Build 
+
+#### Compile
+```bash
+mvn clean compile
+```
+
+#### Test
+```bash
+mvn clean test
+```
+
+#### Build 
+```bash
+mvn clean package
+```
+
+#### Build Docker image
+```bash
+sh build-images.sh
+```
+
+#### Config
+
+Có thể config thông qua flags hoặc trong application.properties trong môi trường dev
+
+Client
+
+|Tham số | Mặc định | ràng buộc               | Ý nghĩa |
+|---|---|-------------------------|---|
+| server-host | localhost |                         | Host TCP của Server |
+| server-port | 9000 |                         | Port TCP của Server |
+| mode | normal | `normal` \| `benchmark` | Chạy 1 Client vô hạn (Normal) hay N Client theo Load Profile (Benchmark) |
+| simulated-clients | 1 | \>= 1                   | Số Simulated Client (chỉ có ý nghĩa ở Benchmark Mode) |
+| register-rate-per-second | 10 | \> 0                    | Tốc độ ramp-up REGISTER (Benchmark Mode) |
+| benchmark-duration-seconds | 60 | \>= 1                   | Thời gian Benchmark Mode chạy trước khi tự dừng |
+| assumed-validity-period-seconds | 60 |                         | Validity Period giả định dùng khi response `ALREADY_REGISTERED` không mang giá trị thật |
+| renewal-window-min-percent | 60 | 0 <= min < max          | Cận dưới % của Validity Period để chọn thời điểm Renew tiếp theo |
+| renewal-window-max-percent | 90 | max <= 99               | Cận trên % tương ứng |
+| timeout-millis | 2000 | \> 0                    | Timeout socket cho mỗi lần thử gọi |
+| max-retries | 3 | \>= 0                   | Số lần retry tối đa mỗi lệnh gọi |
+| retry-base-delay-millis | 200 | \>= 0                   | Base delay cho exponential backoff + jitter giữa các lần retry |
+| auth-private-key | (khoá demo Ed25519, base64) |                         | Nửa private của Shared Signing Key — phải khớp `authPublicKey` phía Server |
+| otel.exporter.otlp.endpoint | http://localhost:4317 |                         | Endpoint OTLP gRPC của Collector (không thuộc `ClientProperties`, cấu hình riêng ở `OtelLogging`) |
+
+Server
+
+|Tham số | Mặc định | ràng buộc | Ý nghĩa |
+|---|---|---|---|
+| registration.tcp-port | 9000 | | Port TCP nhận REGISTER/RENEW/CANCEL từ Client |
+| registration.validity-period-seconds | 60 | | Validity Period cấp cho mỗi Registration khi REGISTER/RENEW thành công |
+| registration.reaper-interval-millis | 300000 (5 phút) | | Chu kỳ quét của reaper xoá bản ghi hết hạn (an toàn dự phòng, HashedWheelTimer vẫn là cơ chế chính, ADR-0016) |
+| registration.pending-nonce-ttl-seconds | 30 | | TTL của Nonce PENDING (challenge) trước khi tự hết hạn nếu không được xác nhận |
+| registration.auth-public-key | (khoá demo Ed25519, base64) | | Nửa public của Shared Signing Key — phải khớp `auth-private-key` phía Client |
+| registration.timer-tick-duration-millis | 1000 | | Chu kỳ tick của HashedWheelTimer — quyết định độ chính xác thời điểm eviction |
+| registration.timer-ticks-per-wheel | 512 | | Số ô (bucket) trên bánh xe của HashedWheelTimer — cùng với tick duration quyết định thời gian 1 vòng quay đầy đủ |
+| server.port | 8080 | | Port HTTP cho Admin API (`/admin/registrations`, `/admin/registrations/count`) + Swagger UI |
+| otel.exporter.otlp.endpoint | http://localhost:4317 | | Endpoint OTLP gRPC của Collector (cấu hình riêng ở `OtelLogging`) |
+
+
 ## Mô tả ngắn về kiến trúc hệ thống
-- Mô hình tổng thể Client/Server
-- Giao thức mạng được chọn TCP
-### Sơ đồ tổng thể
+- Giao thức mạng TCP
+- Mã hoá bất đối xứng Ed25519 + nonce dùng 1 lần
 
-### Mô hình xử lí
+### Clients
 
-### Cấu trúc và quản lí bộ nhớ
+- Sử dụng multi virtual threads để giả lập benchmark đúng môi trường thực tế, sinh clients tuyến tính theo thời gian.
+
+### Server
+
+- Xử lí đồng thời bằng multi virual threads kết hợp StripedLock theo clientId.
+- Sinh Nonce ngẫu nhiên sử dụng SecureRandom + Length 32 đảm bảo tính ngẫu nhiên và duy nhất
+- Sử dụng Map để tối ưu với các nghiệp vụ cần query theo clientId.
+- Sử dụng HashedWheelTimer để tối ưu bài toán xử lí bản ghi hết hạn.
+- Port 9000 trao đổi thông tin với các clients
+- Port 8080 cho chức năng truy vấn danh sách Client đang đăng ký (Spring webs + swagger)
+
+### Logging
+- Định nghĩa 1 chuẩn log dùng chung cho client và server để dễ dàng tracking
+OpenTelemetry Logs Data Model + W3C Trace Context
+- (Tuỳ chọn): Otel Collector + loki + Grafana cho visualize
+
+## Mô tả định dạng bản tin và luồng xử lí
+
+### Định dạng bản tin
+
+Giao thức nhị phân tự định nghĩa qua TCP. Mỗi frame gồm **header cố định 5 byte** rồi tới **payload dài ngắn tuỳ loại bản tin**:
+
+```text
++------------------+---------------------------------+---------------------------+
+| MessageType (1B) |  Payload Length (4B, Big-Endian)|          Payload          |
++------------------+---------------------------------+---------------------------+
+|      Byte 0      |           Bytes 1..4            |         Bytes 5..N        |
++------------------+---------------------------------+---------------------------+
+```
+
+#### MessageType
+| Message | Value | 
+| --- | ---|
+| REGISTER_REQUEST | 0x01 |
+ | REGISTER_RESPONSE | 0x02 |
+| RENEW_REQUEST | 0x03 |
+| RENEW_RESPONSE | 0x04 |
+| CANCEL_REQUEST | 0x05 |
+| CANCEL_RESPONSE | 0x06
+
+#### Payload
+
+Mọi `*_REQUEST` đều mang **Client ID** (đóng gói thành `long` 8 byte thay vì 12 ký tự ASCII để giảm kích thước, giải mã lại thành chuỗi 12 chữ số khi hiển thị) và **Trace Context** (W3C Trace Context rút gọn: version 1B (reserved, luôn 0) + Trace ID 16B + Span ID 8B + flags 1B = 26 byte), theo sau là phần riêng của từng loại:
+
+| Bản tin | Payload riêng |
+|---|---|
+| `REGISTER_REQUEST` | (không có, nếu là bước 1 xin Nonce) hoặc + `NonceSignature` (bước 2, xác nhận) |
+| `RENEW_REQUEST` / `CANCEL_REQUEST` | + `NonceSignature` |
+| `*_RESPONSE` | `StatusCode` (1 byte) + tuỳ trạng thái: `validityPeriodSeconds` (2 byte, tương đối theo thời điểm nhận chứ không phải mốc thời gian tuyệt đối) và/hoặc `Nonce` (byte cố định) |
+
+`StatusCode`: `SUCCESS`(0x00), `ALREADY_REGISTERED`(0x01), `NOT_REGISTERED`(0x02), `CHALLENGE`(0x03), `CHALLENGE_REJECTED`(0x04), `INVALID_TOKEN`(0x05) — `CHALLENGE`/`CHALLENGE_REJECTED` chỉ xuất hiện ở `REGISTER_RESPONSE`, `INVALID_TOKEN` chỉ ở `RENEW_RESPONSE`/`CANCEL_RESPONSE`.
+
+Payload tối đa 256 byte (`FrameDecoder`) — frame khai báo độ dài vượt mức bị từ chối ngay từ header, trước khi cấp phát bộ nhớ theo dữ liệu chưa xác thực.
+
+### Luồng xử lí
+
+Mỗi kết nối TCP chỉ mang đúng **1 bản tin mỗi chiều** rồi đóng lại ngay (connect → gửi request → nhận response → đóng) — không giữ kết nối lâu dài.
+Nghiệp vụ REGISTER là **2 kết nối tách rời** nối tiếp nhau (xin Nonce, rồi gửi chữ ký).
+
+Phía Server (module `server`, ADR-0015): 1 vòng lặp `accept()` chính giao mỗi kết nối mới cho **1 virtual thread riêng** xử lý bằng blocking I/O. Trong mỗi virtual thread:
+
+1. `FrameDecoder` đọc tích luỹ tới khi đủ 1 frame hoàn chỉnh (chịu được việc đọc dở dang qua nhiều lần `read()`).
+2. `MessageCodec.decode(...)` giải mã frame thành `ProtocolMessage`.
+3. Khoá `StripedLock` theo Client ID.
+4. `RegistrationService.handle(...)` xử lý nghiệp vụ REGISTER/RENEW/CANCEL.
+5. `MessageCodec.encode(...)` mã hoá response, ghi lại qua socket, rồi đóng kết nối.
+
+Frame sai định dạng (`MessageType` không hợp lệ, độ dài payload vượt giới hạn)  khiến  kết nối đó bị đóng.
+
+## Test Tải
+#### Load Profile
+  - Client
+    - Resource Profile : 4.0 CPU / 256MB
+    - max 15000 clients
+    -  150.0/s 
+    - benchmark time:  200s
+    - renewalWindowMinPercent: 60%
+    - renewalWindowMinPercent: 90%
+    - timeoutMillis: 2000 Millis
+    - maxRetries: 3
+    - retryBaseDelayMillis: 500 Millis
+  - Server
+    - Resource Profile : 2.0 CPU / 256MB
+    - validity period seconds: 10s
+
+![Client](./docs/report/benchmark/client.png)
+![Server](./docs/report/benchmark/server.png)
 
 
-### Thiết kế xác thực & an toàn thông tin
-Khoá bất đối xứng Ed25519 + nonce thay đổi qua mỗi lần đăng kí/gia hạn
+## Danh sách hạn chế còn tồn tại và hướng cải tiến nếu có
 
-### Mã nguồn & kịch bản kiểm thử
+## Mã nguồn & kịch bản kiểm thử
 
+| package | Instruction Coverage | Branches Coverage |
+|---------|----------------------| --- |
+| common  | 84%                  | 74% |
+| client  | 58%                  | 45% |
+| server  | 87%                  | 77% |
+
+### Chi tiết 1 số kịch bản yêu cầu
 
 | Kịch bản yêu cầu | Kịch bản kiểm thử | Source | Kết quả |
 |---|---|---|---|

@@ -1,0 +1,11 @@
+=============================================
+============== BENCHMARK REPORT =============
+=============================================
+Load Profile     : 15000 clients | 150.0/s | 200s
+Resource Server Profile : 2.0 CPU / 256MB
+Resource Server Profile : 4.0 CPU / 256MB
+---------------------------------------------
+Server Idle      : CPU 111.6% | RAM   118.7 MB
+Server Active    : CPU 127.5% | RAM   164.0 MB
+Client Active    : CPU 159.6% | RAM   215.2 MB
+=============================================

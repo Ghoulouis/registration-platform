@@ -46,4 +46,46 @@
         </dependencies>
     </dependencyManagement>
 
+    <build>
+        <plugins>
+            <!-- Test coverage. Inherited by every child module: `mvn test` alone produces each
+                 module's own target/site/jacoco/index.html, no per-module config needed. -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>0.8.12</version>
+                <executions>
+                    <execution>
+                        <id>prepare-agent</id>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                        <configuration>
+                            <!-- This JDK's bytecode version is newer than 0.8.12's ASM supports.
+                                 Without this, the agent still tries to instrument whatever
+                                 JDK-internal classes happen to get lazily loaded during a test
+                                 run (sun.util.resources..., java.sql.Date, the XML-DSig RI
+                                 under org.jcp.xml.dsig..., ...) and fails loudly on each one -
+                                 never our own code, which targets Java 21 and instruments fine
+                                 either way. Scoping to our own package root, rather than trying
+                                 to enumerate every JDK-internal namespace that might get hit,
+                                 means no future surprise from some other lazily-loaded JDK
+                                 class - and coverage of JDK internals was never the point. -->
+                            <includes>
+                                <include>com/registration/**</include>
+                            </includes>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>report</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
 </project>

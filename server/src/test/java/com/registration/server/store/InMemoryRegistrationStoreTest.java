@@ -20,7 +20,7 @@ class InMemoryRegistrationStoreTest {
     // Matches production's default tick (application.yml) so these tests, which sleep only
     // 20ms before invoking reapExpired() manually, exercise the reaper itself rather than
     // racing the timer's own eviction.
-    private final InMemoryRegistrationStore store = new InMemoryRegistrationStore(100);
+    private final InMemoryRegistrationStore store = new InMemoryRegistrationStore(100, 512);
 
     @AfterEach
     void tearDown() {
@@ -157,7 +157,7 @@ class InMemoryRegistrationStoreTest {
 
     @Test
     void timerEvictsExpiredPendingNonceWithoutTheReaper() {
-        InMemoryRegistrationStore fastStore = new InMemoryRegistrationStore(5);
+        InMemoryRegistrationStore fastStore = new InMemoryRegistrationStore(5, 512);
         try {
             fastStore.issuePendingNonce(CLIENT_ID, Duration.ofMillis(1));
 
@@ -170,7 +170,7 @@ class InMemoryRegistrationStoreTest {
 
     @Test
     void timerEvictsExpiredRegistrationWithoutTheReaper() {
-        InMemoryRegistrationStore fastStore = new InMemoryRegistrationStore(5);
+        InMemoryRegistrationStore fastStore = new InMemoryRegistrationStore(5, 512);
         try {
             fastStore.issuePendingNonce(CLIENT_ID, Duration.ofSeconds(30));
             fastStore.confirm(CLIENT_ID, Duration.ofMillis(1), Nonce.random());
@@ -227,7 +227,7 @@ class InMemoryRegistrationStoreTest {
         // Regression for ADR-0016's compare-and-remove: the pending Nonce's short-lived
         // eviction timeout must not delete the Registration that superseded it, even if it
         // fires after confirm() has already moved the record to a new generation.
-        InMemoryRegistrationStore fastStore = new InMemoryRegistrationStore(5);
+        InMemoryRegistrationStore fastStore = new InMemoryRegistrationStore(5, 512);
         try {
             Duration pendingNonceTtl = Duration.ofMillis(50);
             fastStore.issuePendingNonce(CLIENT_ID, pendingNonceTtl);

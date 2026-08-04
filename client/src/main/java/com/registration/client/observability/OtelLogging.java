@@ -1,5 +1,7 @@
 package com.registration.client.observability;
 
+import com.registration.common.observability.RegistrationEventLog;
+import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.exporter.otlp.logs.OtlpGrpcLogRecordExporter;
@@ -9,53 +11,64 @@ import io.opentelemetry.sdk.logs.SdkLoggerProvider;
 import io.opentelemetry.sdk.logs.export.BatchLogRecordProcessor;
 import io.opentelemetry.sdk.resources.Resource;
 import jakarta.annotation.PreDestroy;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
+
 /**
  * Wires the real OpenTelemetry Logs SDK (ADR-0018) so every Logback event — framework logs
- * and RegistrationEventLog alike — ships as OTLP to the Collector, alongside the existing
- * plain-text console appender (kept as-is; see logback-spring.xml). The appender itself is
- * configured statically in logback-spring.xml and buffers/replays a bounded number of events
- * until {@link OpenTelemetryAppender#install} connects it to a real instance here.
+ * and {@link RegistrationEventLog} alike — ships as OTLP to the Collector, alongside the
+ * existing plain-text console appender (kept as-is; see logback-spring.xml). The appender
+ * itself is configured statically in logback-spring.xml and buffers/replays a bounded number
+ * of events until {@link OpenTelemetryAppender#install} connects it to a real instance here.
  */
 @Component
 public class OtelLogging {
 
-    private final OpenTelemetrySdk openTelemetry;
+    private static final Logger log = LoggerFactory.getLogger(OtelLogging.class);
+
+    private final OpenTelemetry openTelemetry;
 
     public OtelLogging(@Value("${otel.exporter.otlp.endpoint:http://localhost:4317}") String otlpEndpoint) {
-        Resource resource = Resource.getDefault()
-                .merge(Resource.create(Attributes.of(AttributeKey.stringKey("service.name"), "client")));
+        OpenTelemetry otelInstance;
+        try {
+            Resource resource = Resource.getDefault()
+                    .merge(Resource.create(Attributes.of(AttributeKey.stringKey("service.name"), "server")));
 
-        SdkLoggerProvider loggerProvider = SdkLoggerProvider.builder()
-                .setResource(resource)
-                .addLogRecordProcessor(BatchLogRecordProcessor.builder(
-                                OtlpGrpcLogRecordExporter.builder().setEndpoint(otlpEndpoint).build())
-                        .build())
-                .build();
+            // Thêm Timeout 3s để không làm nghẽn luồng khởi động nếu Collector không phản hồi
+            OtlpGrpcLogRecordExporter logExporter = OtlpGrpcLogRecordExporter.builder()
+                    .setEndpoint(otlpEndpoint)
+                    .setTimeout(Duration.ofSeconds(3))
+                    .build();
 
-        this.openTelemetry = OpenTelemetrySdk.builder()
-                .setLoggerProvider(loggerProvider)
-                .build();
+            SdkLoggerProvider loggerProvider = SdkLoggerProvider.builder()
+                    .setResource(resource)
+                    .addLogRecordProcessor(BatchLogRecordProcessor.builder(logExporter).build())
+                    .build();
 
-        OpenTelemetryAppender.install(openTelemetry);
-    }
+            otelInstance = OpenTelemetrySdk.builder()
+                    .setLoggerProvider(loggerProvider)
+                    .build();
 
-    /**
-     * Flushes and closes the export pipeline. Called explicitly from
-     * {@code ClientSimulatorRunner}'s own {@code shutdown()} (ADR-0018), in addition to
-     * {@link #onContextClose}: Spring's own context-close shutdown hook races the Simulated
-     * Clients' independent manual shutdown hook thread with no ordering guarantee between the
-     * two, so relying on {@code @PreDestroy} alone risks the final CANCEL's buffered logs
-     * being dropped if the SDK shuts down first. Safe to call more than once.
-     */
-    public void shutdown() {
-        openTelemetry.getSdkLoggerProvider().shutdown();
+            OpenTelemetryAppender.install(otelInstance);
+            log.info("Successfully initialized OpenTelemetry Logging exporter to {}", otlpEndpoint);
+
+        } catch (Exception e) {
+            // CATCH TOÀN BỘ LỖI: Giúp app sống dai dù OTel Collector sập
+            log.error("Failed to initialize OpenTelemetry Logging (endpoint: {}). Falling back to Noop instance.", otlpEndpoint, e);
+            otelInstance = OpenTelemetry.noop();
+        }
+
+        this.openTelemetry = otelInstance;
     }
 
     @PreDestroy
-    public void onContextClose() {
-        shutdown();
+    public void shutdown() {
+        if (openTelemetry instanceof OpenTelemetrySdk sdk) {
+            sdk.getSdkLoggerProvider().shutdown();
+        }
     }
 }

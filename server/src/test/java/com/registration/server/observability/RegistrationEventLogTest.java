@@ -51,7 +51,7 @@ class RegistrationEventLogTest {
     void setUp() {
         RegistrationProperties properties =
                 new RegistrationProperties(0, VALIDITY_PERIOD_SECONDS, 1000, 30, PUBLIC_KEY_B64);
-        store = new InMemoryRegistrationStore(100);
+        store = new InMemoryRegistrationStore(100, 512);
         service = new RegistrationService(store, properties);
         signingKey = Ed25519.parsePrivateKey(PRIVATE_SEED_B64);
 

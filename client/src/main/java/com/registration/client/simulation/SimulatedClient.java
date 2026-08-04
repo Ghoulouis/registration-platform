@@ -92,7 +92,7 @@ public final class SimulatedClient implements Runnable {
             return;
         }
 
-        //cancel();
+        cancel();
     }
 
     private int register() throws InterruptedException {
