@@ -157,7 +157,58 @@ Frame sai định dạng (`MessageType` không hợp lệ, độ dài payload v�
 ![Server](./docs/report/benchmark/server.png)
 
 
+
 ## Danh sách hạn chế còn tồn tại và hướng cải tiến nếu có
+
+## Logging
+
+
+
+
+### case đăng kí thành công
+```
+2026-08-04 12:59:16.425 
+info 
+client 
+[449611185381] REGISTER register_success 
+
+2026-08-04 12:59:16.424 
+info 
+server 
+[449611185381] REGISTER auth_success 
+
+2026-08-04 12:59:16.423 
+trace 
+client 
+[449611185381] REGISTER submitting_auth_data 
+
+2026-08-04 12:59:16.420 
+info 
+server 
+[449611185381] REGISTER nonce_issued 
+
+2026-08-04 12:59:16.408 
+trace 
+client 
+[449611185381] REGISTER requesting_nonce 
+```
+### Case renew thành công
+```
+2026-08-04 12:59:23.069 
+info 
+server 
+[449611185381] RENEW renew_success 
+
+2026-08-04 12:59:23.064 
+debug 
+client 
+[449611185381] RENEW send_renew_request 
+```
+
+### Case Renew thất bại (chậm)
+```
+
+```
 
 ## Mã nguồn & kịch bản kiểm thử
 

@@ -1,0 +1,19 @@
+{
+  "totalRequests": 317653,
+  "totalTimeouts": 136,
+  "totalRetries": 136,
+  "register": {
+    "successes": 15000,
+    "failures": 0,
+    "averageResponseTimeMillis": 161.28,
+    "minResponseTimeMillis": 1,
+    "maxResponseTimeMillis": 7302
+  },
+  "renew": {
+    "successes": 293883,
+    "failures": 8634,
+    "averageResponseTimeMillis": 230.82,
+    "minResponseTimeMillis": 0,
+    "maxResponseTimeMillis": 4702
+  }
+}

@@ -63,6 +63,10 @@ public class ClientSimulatorRunner implements ApplicationRunner {
             reportPeriodicallyForDuration(stats, Duration.ofSeconds(properties.benchmarkDurationSeconds()));
             Runtime.getRuntime().removeShutdownHook(shutdownHook);
             shutdown(threads, stats, true);
+            // Only on natural self-termination, not an early Ctrl+C via shutdownHook - the
+            // final CANCELs (triggered by shutdown() above) have already landed in stats by
+            // this point, so the report reflects the complete run.
+            BenchmarkReport.write(stats);
         } else {
             threads.getFirst().join();
         }

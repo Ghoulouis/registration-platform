@@ -1,7 +1,10 @@
 """Benchmark Harness: runs a Benchmark Run (see CONTEXT.md) and produces a Benchmark Report."""
 
 import argparse
+import io
+import json
 import sys
+import tarfile
 import threading
 import time
 from datetime import datetime
@@ -19,7 +22,7 @@ import matplotlib.pyplot as plt
 SERVER_CPUS = 2.0
 SERVER_MEMORY_MB = 256
 CLIENT_CPUS = 4.0
-CLIENT_MEMORY_MB = 256
+CLIENT_MEMORY_MB = 1024
 
 SERVER_IMAGE = "registration-server:latest"
 CLIENT_IMAGE = "registration-client:latest"
@@ -30,6 +33,10 @@ SERVER_PORT = 9000
 SERVER_HTTP_PORT = 8080
 IDLE_WAIT_SECONDS = 5
 COOLDOWN_WAIT_SECONDS = 5
+
+# Written by BenchmarkReport.java into the Client container's working directory
+# (client/Dockerfile's WORKDIR) once Benchmark Mode self-terminates.
+CLIENT_REPORT_PATH = "/app/benchmark-report.json"
 
 # Leaves headroom below the container's hard --memory cap so the JVM hits its own
 # heap ceiling (a normal OutOfMemoryError) rather than getting OOM-killed by the kernel.
@@ -137,6 +144,35 @@ def ensure_images_exist(client: docker.DockerClient):
         sys.exit("\n".join(lines))
 
 
+def fetch_client_report(container) -> dict | None:
+    """Pulls the Client's benchmark-report.json out of the container before it's removed
+    (docker.errors.NotFound means the Client never reached Benchmark Mode's natural
+    self-termination - e.g. it crashed - so there's nothing to fetch)."""
+    try:
+        chunks, _stat = container.get_archive(CLIENT_REPORT_PATH)
+        with tarfile.open(fileobj=io.BytesIO(b"".join(chunks))) as tar:
+            member = tar.getmember("benchmark-report.json")
+            with tar.extractfile(member) as f:
+                return json.load(f)
+    except docker.errors.NotFound:
+        print(f"Warning: Client did not produce {CLIENT_REPORT_PATH} (did it exit abnormally?)")
+        return None
+
+
+def _print_client_diagnostics(container):
+    """The container is about to be removed either way - surface whatever might explain a
+    missing benchmark-report.json (OOM kill, uncaught exception, ...) while it's still around."""
+    try:
+        state = container.attrs.get("State", {})
+        print(f"    Client exit code: {state.get('ExitCode')}, OOMKilled: {state.get('OOMKilled')}")
+        tail = container.logs(tail=40).decode(errors="replace")
+        print("    Last 40 lines of Client logs:")
+        for line in tail.splitlines():
+            print(f"      {line}")
+    except docker.errors.NotFound:
+        pass
+
+
 def cleanup(client: docker.DockerClient):
     for name in (SERVER_CONTAINER_NAME, CLIENT_CONTAINER_NAME):
         try:
@@ -213,6 +249,12 @@ def run_benchmark(args) -> Path:
         active_server_sampler.stop()
         active_client_sampler.stop()
 
+        # Before removal in the `finally` block below - the container's filesystem
+        # (and benchmark-report.json with it) disappears once that runs.
+        client_report = fetch_client_report(client_container)
+        if client_report is None:
+            _print_client_diagnostics(client_container)
+
         print(f"--> Client finished. Cooldown ({COOLDOWN_WAIT_SECONDS}s)...")
         time.sleep(COOLDOWN_WAIT_SECONDS)
 
@@ -222,6 +264,7 @@ def run_benchmark(args) -> Path:
             active_server_samples=active_server_sampler.samples,
             active_client_samples=active_client_sampler.samples,
             phase_boundary=phase_boundary,
+            client_report=client_report,
         )
     finally:
         print("--> Shutting down...")
@@ -275,13 +318,41 @@ def _averages(samples):
     return cpu, mem
 
 
-def generate_report(args, idle_samples, active_server_samples, active_client_samples, phase_boundary) -> Path:
+def _client_report_lines(client_report: dict | None) -> list[str]:
+    """Renders the Client's own benchmark-report.json (BenchmarkReport.java) into the same
+    fixed-width style as the rest of the summary. None means the Client never reached
+    Benchmark Mode's natural self-termination (see fetch_client_report)."""
+    if client_report is None:
+        return ["-" * 45, "Client Report    : not available (Client exited abnormally)"]
+
+    lines = [
+        "-" * 45,
+        f"Total Requests   : {client_report['totalRequests']}",
+        f"Total Timeouts   : {client_report['totalTimeouts']}",
+        f"Total Retries    : {client_report['totalRetries']}",
+    ]
+    for label, key in (("REGISTER", "register"), ("RENEW", "renew")):
+        op = client_report[key]
+        lines.append(
+            f"{label:<8} : success={op['successes']:<6} failure={op['failures']:<6} "
+            f"avg={op['averageResponseTimeMillis']:>6.2f}ms "
+            f"min={op['minResponseTimeMillis']:>5}ms max={op['maxResponseTimeMillis']:>5}ms"
+        )
+    return lines
+
+
+def generate_report(
+    args, idle_samples, active_server_samples, active_client_samples, phase_boundary, client_report=None
+) -> Path:
     report_dir = Path(__file__).parent / "reports" / datetime.now().strftime("%Y%m%d-%H%M%S")
     report_dir.mkdir(parents=True, exist_ok=True)
 
     server_samples = idle_samples + active_server_samples
     _save_chart(report_dir / "server.png", "Server", server_samples, phase_boundary)
     _save_chart(report_dir / "client.png", "Client", active_client_samples)
+
+    if client_report is not None:
+        (report_dir / "client-benchmark-report.json").write_text(json.dumps(client_report, indent=2) + "\n")
 
     idle_cpu, idle_mem = _averages(idle_samples)
     active_server_cpu, active_server_mem = _averages(active_server_samples)
@@ -299,6 +370,7 @@ def generate_report(args, idle_samples, active_server_samples, active_client_sam
             f"Server Idle      : CPU {idle_cpu:>5.1f}% | RAM {idle_mem:>7.1f} MB",
             f"Server Active    : CPU {active_server_cpu:>5.1f}% | RAM {active_server_mem:>7.1f} MB",
             f"Client Active    : CPU {active_client_cpu:>5.1f}% | RAM {active_client_mem:>7.1f} MB",
+            *_client_report_lines(client_report),
             "=" * 45,
         ]
     )

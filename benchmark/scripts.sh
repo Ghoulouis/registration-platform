@@ -1,7 +1,7 @@
 #!/bin/bash
 
-CLIENTS=15000
-RATE=150
+CLIENTS=20000
+RATE=200
 DURATION=200
 
 python benchmark.py \
