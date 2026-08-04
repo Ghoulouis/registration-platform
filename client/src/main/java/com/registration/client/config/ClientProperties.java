@@ -23,7 +23,11 @@ public record ClientProperties(
         @DefaultValue("200") long retryBaseDelayMillis,
         // Demo Shared Signing Key private half (ADR-0009) - matches the Server's default
         // authPublicKey. Not for production use; override both to use a real keypair.
-        @DefaultValue("pU55QBNBWdgYnCyCaZsfU3jImcyqZKGmSv3Nb+YEEbM=") String authPrivateKey) {
+        @DefaultValue("pU55QBNBWdgYnCyCaZsfU3jImcyqZKGmSv3Nb+YEEbM=") String authPrivateKey,
+        // Whether a Simulated Client sends its voluntary CANCEL (ADR-0004) on shutdown.
+        // Defaults to true (the documented Client Simulator lifecycle, CONTEXT.md); set false
+        // to leave Registrations behind on exit instead, e.g. to test Expiration (ADR-0007).
+        @DefaultValue("true") boolean cancelOnExit) {
 
     public ClientProperties {
         if (simulatedClients < 1) {

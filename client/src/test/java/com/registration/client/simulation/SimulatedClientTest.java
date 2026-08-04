@@ -85,6 +85,22 @@ class SimulatedClientTest {
     }
 
     @Test
+    void doesNotCancelOnInterruptWhenCancelOnExitIsFalse() throws InterruptedException {
+        server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.challenge(Nonce.random())));
+        server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.success(10, Nonce.random())));
+
+        SimulatedClient client = newClient(10, 90, 99, false);
+        Thread thread = Thread.ofVirtual().start(client);
+
+        Thread.sleep(200); // let REGISTER complete; client is now waiting out its renewal window
+        thread.interrupt();
+        thread.join(Duration.ofSeconds(2).toMillis());
+
+        assertThat(thread.isAlive()).isFalse();
+        assertThat(stats.forType(OperationType.CANCEL).snapshot().totalAttempts()).isEqualTo(0);
+    }
+
+    @Test
     void stopsWithoutCancelWhenRenewIsRejected() throws InterruptedException {
         server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.challenge(Nonce.random())));
         server.enqueue(ScriptedTcpServer.Behavior.respond(RegisterResponse.success(0, Nonce.random())));
@@ -114,9 +130,14 @@ class SimulatedClientTest {
 
     private SimulatedClient newClient(int assumedValidityPeriodSeconds, int renewalWindowMinPercent,
             int renewalWindowMaxPercent) {
+        return newClient(assumedValidityPeriodSeconds, renewalWindowMinPercent, renewalWindowMaxPercent, true);
+    }
+
+    private SimulatedClient newClient(int assumedValidityPeriodSeconds, int renewalWindowMinPercent,
+            int renewalWindowMaxPercent, boolean cancelOnExit) {
         TcpClient tcpClient = new TcpClient("localhost", server.port(), Duration.ofMillis(500));
         RetryingRequester requester = new RetryingRequester(tcpClient, 2, Duration.ofMillis(20), stats);
         return new SimulatedClient(CLIENT_ID, requester, SIGNING_KEY, assumedValidityPeriodSeconds,
-                renewalWindowMinPercent, renewalWindowMaxPercent);
+                renewalWindowMinPercent, renewalWindowMaxPercent, cancelOnExit);
     }
 }

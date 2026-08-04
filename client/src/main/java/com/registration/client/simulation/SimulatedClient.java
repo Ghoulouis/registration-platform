@@ -26,9 +26,10 @@ import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * One Simulated Client's full lifecycle (CONTEXT.md): REGISTER, then RENEW on a
- * randomized schedule (ADR-0006's Renewal Window) until interrupted, then a
- * best-effort voluntary CANCEL (ADR-0004). Runs entirely on the virtual thread that
- * invokes {@link #run()} — no shared mutable state with other Simulated Clients.
+ * randomized schedule (ADR-0006's Renewal Window) until interrupted, then — if
+ * {@code cancelOnExit} — a best-effort voluntary CANCEL (ADR-0004). Runs entirely on the
+ * virtual thread that invokes {@link #run()} — no shared mutable state with other Simulated
+ * Clients.
  *
  * <p>Owns the Trace for each business transaction (ADR-0012 revision): a Trace represents
  * one REGISTER/RENEW/CANCEL as decided here, not inside {@link RetryingRequester}, which is
@@ -45,6 +46,7 @@ public final class SimulatedClient implements Runnable {
     private final int assumedValidityPeriodSeconds;
     private final int renewalWindowMinPercent;
     private final int renewalWindowMaxPercent;
+    private final boolean cancelOnExit;
 
     // Set from Register's response, updated after every successful Renewal (ADR-0010).
     // Touched only by this Simulated Client's own thread - no synchronization needed.
@@ -60,13 +62,15 @@ public final class SimulatedClient implements Runnable {
             PrivateKey signingKey,
             int assumedValidityPeriodSeconds,
             int renewalWindowMinPercent,
-            int renewalWindowMaxPercent) {
+            int renewalWindowMaxPercent,
+            boolean cancelOnExit) {
         this.clientId = clientId;
         this.requester = requester;
         this.signingKey = signingKey;
         this.assumedValidityPeriodSeconds = assumedValidityPeriodSeconds;
         this.renewalWindowMinPercent = renewalWindowMinPercent;
         this.renewalWindowMaxPercent = renewalWindowMaxPercent;
+        this.cancelOnExit = cancelOnExit;
     }
 
     @Override
@@ -92,7 +96,9 @@ public final class SimulatedClient implements Runnable {
             return;
         }
 
-        cancel();
+        if (cancelOnExit) {
+            cancel();
+        }
     }
 
     private int register() throws InterruptedException {

@@ -21,6 +21,8 @@ import java.security.PrivateKey;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -57,16 +59,34 @@ public class ClientSimulatorRunner implements ApplicationRunner {
         Thread shutdownHook = new Thread(() -> shutdown(threads, stats, benchmarkMode), "shutdown");
         Runtime.getRuntime().addShutdownHook(shutdownHook);
 
+        BenchmarkReport report = null;
+        ScheduledExecutorService sampler = null;
+        if (benchmarkMode) {
+            // Started before launchSimulatedClients, not after: ramp-up (register-rate-limited,
+            // so it can take a while at high simulated-clients counts) is part of the Active
+            // phase's own process lifetime (CONTEXT.md), and belongs in the time series too -
+            // otherwise the first snapshot shows ramp-up's totals as an instant jump rather
+            // than the gradual climb it actually was.
+            report = new BenchmarkReport();
+            sampler = Executors.newSingleThreadScheduledExecutor(
+                    r -> Thread.ofVirtual().name("benchmark-report-sampler").unstarted(r));
+            BenchmarkReport finalReport = report;
+            sampler.scheduleAtFixedRate(() -> finalReport.recordSnapshot(stats), 0, 1, TimeUnit.SECONDS);
+        }
+
         launchSimulatedClients(clientCount, stats, threads);
 
         if (benchmarkMode) {
             reportPeriodicallyForDuration(stats, Duration.ofSeconds(properties.benchmarkDurationSeconds()));
             Runtime.getRuntime().removeShutdownHook(shutdownHook);
             shutdown(threads, stats, true);
-            // Only on natural self-termination, not an early Ctrl+C via shutdownHook - the
-            // final CANCELs (triggered by shutdown() above) have already landed in stats by
-            // this point, so the report reflects the complete run.
-            BenchmarkReport.write(stats);
+
+            sampler.shutdown();
+            // One final snapshot, only on natural self-termination (not an early Ctrl+C via
+            // shutdownHook) - the CANCELs shutdown() just triggered have already landed in
+            // stats by this point, so the time series' last point reflects the complete run.
+            report.recordSnapshot(stats);
+            report.write();
         } else {
             threads.getFirst().join();
         }
@@ -89,7 +109,8 @@ public class ClientSimulatorRunner implements ApplicationRunner {
                     signingKey,
                     properties.assumedValidityPeriodSeconds(),
                     properties.renewalWindowMinPercent(),
-                    properties.renewalWindowMaxPercent());
+                    properties.renewalWindowMaxPercent(),
+                    properties.cancelOnExit());
 
             threads.add(Thread.ofVirtual().name("simulated-client-" + i).start(client));
 

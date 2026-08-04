@@ -1,19 +1,106 @@
+[
 {
-  "totalRequests": 317653,
-  "totalTimeouts": 136,
-  "totalRetries": 136,
+  "timestamp": "2026-08-04T15:10:50.235447Z",
+  "totalRequests": 0,
+  "totalTimeouts": 0,
+  "totalRetries": 0,
   "register": {
-    "successes": 15000,
-    "failures": 0,
-    "averageResponseTimeMillis": 161.28,
-    "minResponseTimeMillis": 1,
-    "maxResponseTimeMillis": 7302
-  },
+      "successes": 0,
+      "failures": 0,
+      "averageResponseTimeMillis": 0.00,
+      "minResponseTimeMillis": 0,
+      "maxResponseTimeMillis": 0,
+      "cumulativeAverageResponseTimeMillis": 0.00,
+      "cumulativeMinResponseTimeMillis": 0,
+      "cumulativeMaxResponseTimeMillis": 0
+    },
   "renew": {
-    "successes": 293883,
-    "failures": 8634,
-    "averageResponseTimeMillis": 230.82,
-    "minResponseTimeMillis": 0,
-    "maxResponseTimeMillis": 4702
-  }
+      "successes": 0,
+      "failures": 0,
+      "averageResponseTimeMillis": 0.00,
+      "minResponseTimeMillis": 0,
+      "maxResponseTimeMillis": 0,
+      "cumulativeAverageResponseTimeMillis": 0.00,
+      "cumulativeMinResponseTimeMillis": 0,
+      "cumulativeMaxResponseTimeMillis": 0
+    }
+},
+{
+  "timestamp": "2026-08-04T15:10:51.239527Z",
+  "totalRequests": 3,
+  "totalTimeouts": 0,
+  "totalRetries": 0,
+  "register": {
+      "successes": 3,
+      "failures": 0,
+      "averageResponseTimeMillis": 20.33,
+      "minResponseTimeMillis": 10,
+      "maxResponseTimeMillis": 39,
+      "cumulativeAverageResponseTimeMillis": 20.33,
+      "cumulativeMinResponseTimeMillis": 10,
+      "cumulativeMaxResponseTimeMillis": 39
+    },
+  "renew": {
+      "successes": 0,
+      "failures": 0,
+      "averageResponseTimeMillis": 0.00,
+      "minResponseTimeMillis": 0,
+      "maxResponseTimeMillis": 0,
+      "cumulativeAverageResponseTimeMillis": 0.00,
+      "cumulativeMinResponseTimeMillis": 0,
+      "cumulativeMaxResponseTimeMillis": 0
+    }
+},
+{
+  "timestamp": "2026-08-04T15:10:52.239697Z",
+  "totalRequests": 3,
+  "totalTimeouts": 0,
+  "totalRetries": 0,
+  "register": {
+      "successes": 3,
+      "failures": 0,
+      "averageResponseTimeMillis": 0.00,
+      "minResponseTimeMillis": 0,
+      "maxResponseTimeMillis": 0,
+      "cumulativeAverageResponseTimeMillis": 20.33,
+      "cumulativeMinResponseTimeMillis": 10,
+      "cumulativeMaxResponseTimeMillis": 39
+    },
+  "renew": {
+      "successes": 0,
+      "failures": 0,
+      "averageResponseTimeMillis": 0.00,
+      "minResponseTimeMillis": 0,
+      "maxResponseTimeMillis": 0,
+      "cumulativeAverageResponseTimeMillis": 0.00,
+      "cumulativeMinResponseTimeMillis": 0,
+      "cumulativeMaxResponseTimeMillis": 0
+    }
+},
+{
+  "timestamp": "2026-08-04T15:10:52.943722Z",
+  "totalRequests": 3,
+  "totalTimeouts": 0,
+  "totalRetries": 0,
+  "register": {
+      "successes": 3,
+      "failures": 0,
+      "averageResponseTimeMillis": 0.00,
+      "minResponseTimeMillis": 0,
+      "maxResponseTimeMillis": 0,
+      "cumulativeAverageResponseTimeMillis": 20.33,
+      "cumulativeMinResponseTimeMillis": 10,
+      "cumulativeMaxResponseTimeMillis": 39
+    },
+  "renew": {
+      "successes": 0,
+      "failures": 0,
+      "averageResponseTimeMillis": 0.00,
+      "minResponseTimeMillis": 0,
+      "maxResponseTimeMillis": 0,
+      "cumulativeAverageResponseTimeMillis": 0.00,
+      "cumulativeMinResponseTimeMillis": 0,
+      "cumulativeMaxResponseTimeMillis": 0
+    }
 }
+]

@@ -45,6 +45,7 @@ Client
 | max-retries | 3 | \>= 0                   | Số lần retry tối đa mỗi lệnh gọi |
 | retry-base-delay-millis | 200 | \>= 0                   | Base delay cho exponential backoff + jitter giữa các lần retry |
 | auth-private-key | (khoá demo Ed25519, base64) |                         | Nửa private của Shared Signing Key — phải khớp `authPublicKey` phía Server |
+| cancel-on-exit | true |                         | Có gửi CANCEL tự nguyện (ADR-0004) khi Simulated Client bị ngắt/tắt hay không — `false` để cố tình bỏ lại Registration khi thoát (vd. test Expiration) |
 | otel.exporter.otlp.endpoint | http://localhost:4317 |                         | Endpoint OTLP gRPC của Collector (không thuộc `ClientProperties`, cấu hình riêng ở `OtelLogging`) |
 
 Server
@@ -68,11 +69,11 @@ Server
 
 ### Clients
 
-- Sử dụng multi virtual threads để giả lập benchmark đúng môi trường thực tế, sinh clients tuyến tính theo thời gian.
-
+- Sử dụng multi virtual threads để giả lập benchmark đúng môi trường thực tế, sinh lần lượt các clients tuyến tính theo thời gian.
+- Cách xử lí timeout và retry: đặt setSoTimeout cho setSoTimeout, sử dụng vòng lặp để retry
 ### Server
 
-- Xử lí đồng thời bằng multi virual threads kết hợp StripedLock theo clientId.
+- Xử lí đồng thời bằng multi virual threads kết hợp StripedLock theo clientId (tận dụng được multi core cpu)
 - Sinh Nonce ngẫu nhiên sử dụng SecureRandom + Length 32 đảm bảo tính ngẫu nhiên và duy nhất
 - Sử dụng Map để tối ưu với các nghiệp vụ cần query theo clientId.
 - Sử dụng HashedWheelTimer để tối ưu bài toán xử lí bản ghi hết hạn.
@@ -159,6 +160,8 @@ Frame sai định dạng (`MessageType` không hợp lệ, độ dài payload v�
 
 
 ## Danh sách hạn chế còn tồn tại và hướng cải tiến nếu có
+
+Hiện tại đang bottleneck phía CPU
 
 ## Logging
 

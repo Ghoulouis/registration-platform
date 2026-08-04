@@ -20,9 +20,9 @@ import matplotlib.pyplot as plt
 # Resource Profile (ADR-0008): hard CPU/RAM cap per process, enforced by Docker.
 # Script config, not a CLI flag -- edit here to test a different envelope.
 SERVER_CPUS = 2.0
-SERVER_MEMORY_MB = 256
+SERVER_MEMORY_MB = 4096
 CLIENT_CPUS = 4.0
-CLIENT_MEMORY_MB = 1024
+CLIENT_MEMORY_MB = 4096
 
 SERVER_IMAGE = "registration-server:latest"
 CLIENT_IMAGE = "registration-client:latest"
@@ -50,6 +50,12 @@ def parse_args():
     parser.add_argument("--duration", type=int, default=60, help="Benchmark Duration in seconds (Load Profile)")
     parser.add_argument("--renew-min", type=int, default=50, help="Benchmark Duration in seconds (Load Profile)")
     parser.add_argument("--renew-max", type=int, default=70, help="Benchmark Duration in seconds (Load Profile)")
+    parser.add_argument(
+        "--validity-period-seconds", type=int, default=10,
+        help="Server's registration.validity-period-seconds (matches application.yml's baked-in default)")
+    parser.add_argument(
+        "--timer-ticks-per-wheel", type=int, default=512,
+        help="Server's registration.timer-ticks-per-wheel (HashedWheelTimer bucket count, matches its own default)")
 
     return parser.parse_args()
 
@@ -144,10 +150,11 @@ def ensure_images_exist(client: docker.DockerClient):
         sys.exit("\n".join(lines))
 
 
-def fetch_client_report(container) -> dict | None:
+def fetch_client_report(container) -> list[dict] | None:
     """Pulls the Client's benchmark-report.json out of the container before it's removed
     (docker.errors.NotFound means the Client never reached Benchmark Mode's natural
-    self-termination - e.g. it crashed - so there's nothing to fetch)."""
+    self-termination - e.g. it crashed - so there's nothing to fetch). It's a JSON array,
+    one timestamped REGISTER/RENEW snapshot per second of the run (BenchmarkReport.java)."""
     try:
         chunks, _stat = container.get_archive(CLIENT_REPORT_PATH)
         with tarfile.open(fileobj=io.BytesIO(b"".join(chunks))) as tar:
@@ -210,6 +217,11 @@ def run_benchmark(args) -> Path:
                 f"{SERVER_PORT}/tcp": SERVER_PORT,
                 f"{SERVER_HTTP_PORT}/tcp": SERVER_HTTP_PORT
             },
+            command=[
+                f"--registration.validity-period-seconds={args.validity_period_seconds}",
+                f"--registration.timer-ticks-per-wheel={args.timer_ticks_per_wheel}",
+                f"--client.cancel-on-exit=false=false"
+            ],
         )
 
         print(f"--> Idle phase ({IDLE_WAIT_SECONDS}s)...")
@@ -318,27 +330,87 @@ def _averages(samples):
     return cpu, mem
 
 
-def _client_report_lines(client_report: dict | None) -> list[str]:
-    """Renders the Client's own benchmark-report.json (BenchmarkReport.java) into the same
-    fixed-width style as the rest of the summary. None means the Client never reached
-    Benchmark Mode's natural self-termination (see fetch_client_report)."""
-    if client_report is None:
+def _client_report_lines(client_snapshot: dict | None) -> list[str]:
+    """Renders one snapshot from the Client's own benchmark-report.json (BenchmarkReport.java,
+    normally its last entry) into the same fixed-width style as the rest of the summary. None
+    means the Client never reached Benchmark Mode's natural self-termination, or its time
+    series was empty (see fetch_client_report). Uses the cumulative*ResponseTimeMillis fields
+    (whole run so far), not the plain ones (windowed, since the previous snapshot - meant for
+    the time-series charts, not a single-point run-wide summary like this one)."""
+    if client_snapshot is None:
         return ["-" * 45, "Client Report    : not available (Client exited abnormally)"]
 
     lines = [
         "-" * 45,
-        f"Total Requests   : {client_report['totalRequests']}",
-        f"Total Timeouts   : {client_report['totalTimeouts']}",
-        f"Total Retries    : {client_report['totalRetries']}",
+        f"Total Requests   : {client_snapshot['totalRequests']}",
+        f"Total Timeouts   : {client_snapshot['totalTimeouts']}",
+        f"Total Retries    : {client_snapshot['totalRetries']}",
     ]
     for label, key in (("REGISTER", "register"), ("RENEW", "renew")):
-        op = client_report[key]
+        op = client_snapshot[key]
         lines.append(
             f"{label:<8} : success={op['successes']:<6} failure={op['failures']:<6} "
-            f"avg={op['averageResponseTimeMillis']:>6.2f}ms "
-            f"min={op['minResponseTimeMillis']:>5}ms max={op['maxResponseTimeMillis']:>5}ms"
+            f"avg={op['cumulativeAverageResponseTimeMillis']:>6.2f}ms "
+            f"min={op['cumulativeMinResponseTimeMillis']:>5}ms max={op['cumulativeMaxResponseTimeMillis']:>5}ms"
         )
     return lines
+
+
+def _client_report_elapsed_seconds(client_report: list[dict]) -> list[float]:
+    """Converts each snapshot's ISO-8601 timestamp (BenchmarkReport.java's Instant.toString())
+    into seconds elapsed since the first snapshot, for use as a chart's shared x-axis."""
+    timestamps = [datetime.fromisoformat(s["timestamp"].replace("Z", "+00:00")) for s in client_report]
+    start = timestamps[0]
+    return [(t - start).total_seconds() for t in timestamps]
+
+
+def _save_client_totals_chart(path: Path, elapsed: list[float], client_report: list[dict]):
+    """Part 1: totalRequests/totalTimeouts/totalRetries over time, one small chart each."""
+    fields = [
+        ("totalRequests", "Total Requests"),
+        ("totalTimeouts", "Total Timeouts"),
+        ("totalRetries", "Total Retries"),
+    ]
+    fig, axes = plt.subplots(1, len(fields), figsize=(15, 4))
+    fig.suptitle("Client - Totals Over Time (REGISTER + RENEW)")
+
+    for ax, (key, title) in zip(axes, fields):
+        ax.plot(elapsed, [snapshot[key] for snapshot in client_report])
+        ax.set_title(title)
+        ax.set_xlabel("Elapsed (s)")
+        ax.set_ylabel("Count")
+
+    fig.tight_layout()
+    fig.savefig(path)
+    plt.close(fig)
+
+
+def _save_client_register_vs_renew_chart(path: Path, elapsed: list[float], client_report: list[dict]):
+    """Part 2: REGISTER vs RENEW, overlaid, for each of the 5 per-operation metrics. The 3
+    response-time metrics use the windowed fields (since the previous snapshot) rather than
+    the cumulative* ones, so the chart shows how response times are behaving at each point in
+    time instead of a whole-run average that flattens out once the sample count grows large."""
+    metrics = [
+        ("successes", "Successes", "count"),
+        ("failures", "Failures", "count"),
+        ("averageResponseTimeMillis", "Average Response Time", "ms"),
+        ("minResponseTimeMillis", "Min Response Time", "ms"),
+        ("maxResponseTimeMillis", "Max Response Time", "ms"),
+    ]
+    fig, axes = plt.subplots(len(metrics), 1, figsize=(10, 3 * len(metrics)), sharex=True)
+    fig.suptitle("Client - REGISTER vs RENEW Over Time")
+
+    for ax, (key, title, unit) in zip(axes, metrics):
+        ax.plot(elapsed, [snapshot["register"][key] for snapshot in client_report], label="REGISTER")
+        ax.plot(elapsed, [snapshot["renew"][key] for snapshot in client_report], label="RENEW")
+        ax.set_title(title)
+        ax.set_ylabel(unit)
+        ax.legend(loc="upper right", fontsize=8)
+
+    axes[-1].set_xlabel("Elapsed (s)")
+    fig.tight_layout()
+    fig.savefig(path)
+    plt.close(fig)
 
 
 def generate_report(
@@ -351,8 +423,13 @@ def generate_report(
     _save_chart(report_dir / "server.png", "Server", server_samples, phase_boundary)
     _save_chart(report_dir / "client.png", "Client", active_client_samples)
 
-    if client_report is not None:
+    last_client_snapshot = None
+    if client_report:  # truthy for a non-empty list; None and [] both skip this
         (report_dir / "client-benchmark-report.json").write_text(json.dumps(client_report, indent=2) + "\n")
+        elapsed = _client_report_elapsed_seconds(client_report)
+        _save_client_totals_chart(report_dir / "client-totals.png", elapsed, client_report)
+        _save_client_register_vs_renew_chart(report_dir / "client-register-vs-renew.png", elapsed, client_report)
+        last_client_snapshot = client_report[-1]
 
     idle_cpu, idle_mem = _averages(idle_samples)
     active_server_cpu, active_server_mem = _averages(active_server_samples)
@@ -364,13 +441,15 @@ def generate_report(
             " BENCHMARK REPORT ".center(45, "="),
             "=" * 45,
             f"Load Profile     : {args.clients} clients | {args.rate}/s | {args.duration}s",
+            f"Server Config    : validity-period={args.validity_period_seconds}s | "
+            f"timer-ticks-per-wheel={args.timer_ticks_per_wheel}",
             f"Resource Server Profile : {SERVER_CPUS} CPU / {SERVER_MEMORY_MB}MB",
             f"Resource Server Profile : {CLIENT_CPUS} CPU / {SERVER_MEMORY_MB}MB",
             "-" * 45,
             f"Server Idle      : CPU {idle_cpu:>5.1f}% | RAM {idle_mem:>7.1f} MB",
             f"Server Active    : CPU {active_server_cpu:>5.1f}% | RAM {active_server_mem:>7.1f} MB",
             f"Client Active    : CPU {active_client_cpu:>5.1f}% | RAM {active_client_mem:>7.1f} MB",
-            *_client_report_lines(client_report),
+            *_client_report_lines(last_client_snapshot),
             "=" * 45,
         ]
     )
