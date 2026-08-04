@@ -126,6 +126,7 @@ public final class SimulatedClient implements Runnable {
             NonceSignature signature = Ed25519.sign(signingKey, currentNonce);
             RenewResponse response;
             try {
+                RegistrationEventLog.log(clientId, "RENEW", "send_renew_request", RegistrationEventLog.Level.DEBUG);
                 response = requester.renew(clientId, signature, trace);
             } catch (CallFailedException e) {
                 throw new RenewalFailedException(e.getMessage());

@@ -29,18 +29,4 @@ public final class Stats {
         }
         return forType(OperationType.REGISTER).snapshot().successes() / elapsedSeconds;
     }
-
-    public String report() {
-        StringBuilder sb = new StringBuilder();
-        sb.append(String.format("Actual registration rate: %.2f/s%n", actualRegistrationRatePerSecond()));
-        for (OperationType type : OperationType.values()) {
-            OperationStats.Snapshot s = forType(type).snapshot();
-            sb.append(String.format(
-                    "%-8s total=%-6d success=%-6d failure=%-6d timeouts=%-6d retries=%-6d "
-                            + "avgMs=%-8.1f minMs=%-6d maxMs=%-6d%n",
-                    type, s.totalAttempts(), s.successes(), s.failures(), s.timeouts(), s.retryAttempts(),
-                    s.averageResponseTimeMillis(), s.minResponseTimeMillis(), s.maxResponseTimeMillis()));
-        }
-        return sb.toString();
-    }
 }

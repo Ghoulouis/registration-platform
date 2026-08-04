@@ -1,5 +1,6 @@
 package com.registration.server.net;
 
+import com.registration.common.observability.RegistrationEventLog;
 import com.registration.common.protocol.CancelRequest;
 import com.registration.common.protocol.ClientId;
 import com.registration.common.protocol.FrameDecoder;
@@ -31,6 +32,8 @@ import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.HexFormat;
 import java.util.concurrent.locks.ReentrantLock;
+
+import static com.registration.common.observability.RegistrationEventLog.Level.INFO;
 
 /**
  * One virtual thread per connection, doing plain blocking I/O (ADR-0015, Centralized Server
@@ -99,7 +102,7 @@ public class TcpServer implements SmartLifecycle {
                 socket = serverSocket.accept();
             } catch (IOException e) {
                 if (running) {
-                    log.error("Accept failed", e);
+                    RegistrationEventLog.log( "NETWORK", "Accept failed", INFO);
                 }
                 continue;
             }
@@ -113,13 +116,13 @@ public class TcpServer implements SmartLifecycle {
             ProtocolMessage response = handleWithLockAndTraceContext(request);
             writeResponse(socket, response);
         } catch (IOException e) {
-            log.debug("Connection error, closing", e);
+            RegistrationEventLog.log( "NETWORK", "Connection error", INFO);
         } catch (RuntimeException e) {
             // FrameDecoder/MessageCodec reject malformed input (unknown MessageType, an
             // out-of-range or negative payload length, a payload that's the wrong shape for
             // its declared type) by throwing unchecked exceptions - isolate that to this one
             // connection's own virtual thread rather than anything shared (ADR-0015).
-            log.warn("Malformed frame or protocol error, closing connection", e);
+            RegistrationEventLog.log( "NETWORK", "Malformed frame", INFO);
         }
     }
 

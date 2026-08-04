@@ -20,6 +20,17 @@
         <appender-ref ref="OTEL"/>
     </logger>
 
+    <!-- The OTel SDK/exporter's own diagnostics (e.g. "Failed to export logs" when the
+         Collector is unreachable) must never flow back into the OTEL appender - otherwise a
+         downed Collector logs its own connection failure via the same broken export pipeline
+         it's complaining about, feeding itself indefinitely. CONSOLE-only keeps the failure
+         visible without that loop; the Collector being unreachable must never affect a
+         Simulated Client's REGISTER/RENEW/CANCEL flow either way (BatchLogRecordProcessor
+         exports off the calling thread and drops on failure), this only stops the noise. -->
+    <logger name="io.opentelemetry" level="WARN" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+    </logger>
+
     <root level="INFO">
         <appender-ref ref="CONSOLE"/>
         <appender-ref ref="OTEL"/>
