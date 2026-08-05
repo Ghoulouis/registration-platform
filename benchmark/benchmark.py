@@ -20,9 +20,9 @@ import matplotlib.pyplot as plt
 # Resource Profile (ADR-0008): hard CPU/RAM cap per process, enforced by Docker.
 # Script config, not a CLI flag -- edit here to test a different envelope.
 SERVER_CPUS = 2.0
-SERVER_MEMORY_MB = 4096
+SERVER_MEMORY_MB = 512
 CLIENT_CPUS = 4.0
-CLIENT_MEMORY_MB = 4096
+CLIENT_MEMORY_MB = 512
 
 SERVER_IMAGE = "registration-server:latest"
 CLIENT_IMAGE = "registration-client:latest"

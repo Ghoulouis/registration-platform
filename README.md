@@ -19,9 +19,12 @@ mvn clean test
 mvn clean package
 ```
 
-#### Build Docker image
+#### Build Docker image & benchmark
+
 ```bash
 sh build-images.sh
+pip install -r benchmark/requirements.txt
+sh benchmark/scripts.sh
 ```
 
 #### Config
@@ -62,6 +65,9 @@ Server
 | server.port | 8080 | | Port HTTP cho Admin API (`/admin/registrations`, `/admin/registrations/count`) + Swagger UI |
 | otel.exporter.otlp.endpoint | http://localhost:4317 | | Endpoint OTLP gRPC của Collector (cấu hình riêng ở `OtelLogging`) |
 
+## Run & Benchmark
+- Có thể chạy file .jar trực tiếp sau khi compile hoặc triển khai docker.compose để chạy.
+- Có sẵn cấu hình triển khai Docker cho hệ thống logging đi kèm (nếu cần).
 
 ## Mô tả ngắn về kiến trúc hệ thống
 - Giao thức mạng TCP
@@ -71,6 +77,7 @@ Server
 
 - Sử dụng multi virtual threads để giả lập benchmark đúng môi trường thực tế, sinh lần lượt các clients tuyến tính theo thời gian.
 - Cách xử lí timeout và retry: đặt setSoTimeout cho setSoTimeout, sử dụng vòng lặp để retry
+- Sử dụng jitter để ngẫu nhiên hoá thời gian gửi request thay vì cố định 1 khoảng thời gian
 ### Server
 
 - Xử lí đồng thời bằng multi virual threads kết hợp StripedLock theo clientId (tận dụng được multi core cpu)
@@ -140,28 +147,37 @@ Frame sai định dạng (`MessageType` không hợp lệ, độ dài payload v�
 
 ## Test Tải
 #### Load Profile
-  - Client
-    - Resource Profile : 4.0 CPU / 256MB
-    - max 15000 clients
-    -  150.0/s 
-    - benchmark time:  200s
-    - renewalWindowMinPercent: 60%
-    - renewalWindowMinPercent: 90%
-    - timeoutMillis: 2000 Millis
-    - maxRetries: 3
-    - retryBaseDelayMillis: 500 Millis
-  - Server
-    - Resource Profile : 2.0 CPU / 256MB
-    - validity period seconds: 10s
+- Môi trường
+  - Sử dụng môi trường Docker để benchmark với limit CPU/RAM
+- Client
+  - Resource Profile : 4.0 CPU / 512MB
+  - max 15000 clients
+  -  150.0/s 
+  - benchmark time:  100s (sau giai đoạn ramp-up)
+  - renewalWindowMinPercent: 60%
+  - renewalWindowMinPercent: 90%
+  - timeoutMillis: 2000 Millis
+  - maxRetries: 3
+  - retryBaseDelayMillis: 500 Millis
+- Server
+  - Resource Profile : 2.0 CPU / 512MB
+  - validity period seconds: 10s
 
 ![Client](./docs/report/benchmark/client.png)
 ![Server](./docs/report/benchmark/server.png)
-
+![Client Total](./docs/report/benchmark/client-totals.png)
+![Client Register](./docs/report/benchmark/client-register-vs-renew.png)
 
 
 ## Danh sách hạn chế còn tồn tại và hướng cải tiến nếu có
+### Hạn chế còn tồn tại
+1. Giới hạn năng lực CPU
+   - Với cấu hình 2 CPU, ổn định ở 15000 clients, nenew trung bình 8s, quy đổi tải  ta có 1,875 request/s và mỗi request cần verify chữ ký theo thuật toán Ed25519.
+     - Tương đương cấu hình 3 triệu clients / renew 30 phút và 50 triệu clients / renew 8 tiếng
+   - Hiện tại đang bottleneck phía CPU do thuật toán xác minh chữ kí Ed25519( verify 1 chữ kí 32 bytes tốn khoảng 2e5 phép tính)
 
-Hiện tại đang bottleneck phía CPU
+### Hướng cải tiến 
+- Mở rộng triển khai theo chiều ngang, chuyển thiết kế sang mô hình phân tán để có thể có nhiều instance xác minh.
 
 ## Logging
 
@@ -210,7 +226,68 @@ client
 
 ### Case Renew thất bại (chậm)
 ```
+2026-08-04 13:02:14.481 
+warn 
+client 
+[564221282355] RENEW call_failed 
 
+2026-08-04 13:02:12.765 
+warn 
+server 
+[564221282355] RENEW not_registered 
+
+2026-08-04 13:02:11.802 
+debug 
+client 
+[564221282355] RENEW send_renew_request 
+
+2026-08-04 13:02:02.483 
+info 
+client 
+[564221282355] RENEW renew_success 
+
+2026-08-04 13:02:02.450 
+info 
+server 
+[564221282355] RENEW renew_success 
+
+2026-08-04 13:02:02.096 
+debug 
+client 
+[564221282355] RENEW send_renew_request 
+``` 
+
+### Case invalid signature 
+```
+2026-08-04 12:59:37.252 
+warn 
+server 
+[564221282355] REGISTER invalid_signature 
+
+2026-08-04 12:59:37.250 
+info 
+server 
+[564221282355] REGISTER nonce_issued 
+
+2026-08-04 12:59:37.189 
+trace 
+client 
+[564221282355] REGISTER requesting_nonce 
+
+2026-08-04 12:59:35.133 
+trace 
+client 
+[564221282355] REGISTER submitting_auth_data 
+
+2026-08-04 12:59:34.924 
+info 
+server 
+[564221282355] REGISTER nonce_issued 
+
+2026-08-04 12:59:34.196 
+trace 
+client 
+[564221282355] REGISTER requesting_nonce 
 ```
 
 ## Mã nguồn & kịch bản kiểm thử

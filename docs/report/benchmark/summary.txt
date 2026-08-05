@@ -1,11 +1,18 @@
 =============================================
 ============== BENCHMARK REPORT =============
 =============================================
-Load Profile     : 15000 clients | 150.0/s | 200s
-Resource Server Profile : 2.0 CPU / 256MB
-Resource Server Profile : 4.0 CPU / 256MB
+Load Profile     : 15000 clients | 100.0/s | 100s
+Server Config    : validity-period=10s | timer-ticks-per-wheel=10000
+Resource Server Profile : 2.0 CPU / 512MB
+Resource Server Profile : 4.0 CPU / 512MB
 ---------------------------------------------
-Server Idle      : CPU 111.6% | RAM   118.7 MB
-Server Active    : CPU 127.5% | RAM   164.0 MB
-Client Active    : CPU 159.6% | RAM   215.2 MB
+Server Idle      : CPU  89.1% | RAM   120.0 MB
+Server Active    : CPU 111.2% | RAM   160.2 MB
+Client Active    : CPU 138.5% | RAM   197.2 MB
+---------------------------------------------
+Total Requests   : 369529
+Total Timeouts   : 64
+Total Retries    : 64
+REGISTER : success=15000  failure=0      avg=  3.16ms min=    1ms max= 1069ms
+RENEW    : success=354175 failure=288    avg= 38.60ms min=    0ms max= 2907ms
 =============================================
