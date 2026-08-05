@@ -88,7 +88,7 @@ Server
 - Sử dụng jitter để ngẫu nhiên hoá thời gian gửi request thay vì cố định 1 khoảng thời gian
 ### Server
 
-- Xử lí đồng thời bằng multi virual threads kết hợp StripedLock theo clientId (tận dụng được multi core cpu)
+- Xử lí đồng thời bằng multi virtual threads kết hợp StripedLock theo clientId (tận dụng được multi core cpu)
 - Sinh Nonce ngẫu nhiên sử dụng SecureRandom + Length 32 đảm bảo tính ngẫu nhiên và duy nhất
 - Sử dụng Map để tối ưu với các nghiệp vụ cần query theo clientId.
 - Sử dụng HashedWheelTimer để tối ưu bài toán xử lí bản ghi hết hạn.
@@ -97,8 +97,8 @@ Server
 
 ### Logging
 - Định nghĩa 1 chuẩn log dùng chung cho client và server để dễ dàng tracking
-OpenTelemetry Logs Data Model + W3C Trace Context
-- (Tuỳ chọn): Otel Collector + loki + Grafana cho visualize
+- Sử dụng chuẩn OpenTelemetry Logs Data Model + W3C Trace Context
+- Stack sử dụng: Otel Collector + loki + Grafana
 
 ## Mô tả định dạng bản tin và luồng xử lí
 
@@ -186,11 +186,6 @@ Frame sai định dạng (`MessageType` không hợp lệ, độ dài payload v�
 
 ### Hướng cải tiến 
 - Mở rộng triển khai theo chiều ngang, chuyển thiết kế sang mô hình phân tán để có thể có nhiều instance xác minh.
-
-## Logging
-
-
-
 
 ### case đăng kí thành công
 ```
