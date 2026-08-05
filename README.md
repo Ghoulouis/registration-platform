@@ -1,8 +1,16 @@
 # REGISTRATION SYSTEM
 
-## Build & Config & Run
+## Source cocde & Build & Config & Run
 
-### Test & Build 
+### Souce code
+
+#### Common
+Là thư viện dùng chung cho cả Client và Server để thống nhất về thuật toán mã hoá, log và các message protocol.
+#### Client
+- Bao gồm thư viện common dùng chung và folder clients
+#### Server
+- Bao gồm thư viện common dùng chung và folder server
+#### Test & Build 
 
 #### Compile
 ```bash
