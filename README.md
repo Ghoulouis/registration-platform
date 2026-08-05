@@ -187,6 +187,8 @@ Frame sai định dạng (`MessageType` không hợp lệ, độ dài payload v�
 ### Hướng cải tiến 
 - Mở rộng triển khai theo chiều ngang, chuyển thiết kế sang mô hình phân tán để có thể có nhiều instance xác minh.
 
+## Logging
+
 ### case đăng kí thành công
 ```
 2026-08-04 12:59:16.425 
